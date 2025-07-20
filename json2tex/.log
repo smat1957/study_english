@@ -1,0 +1,35 @@
+This is e-upTeX, Version 3.141592653-p4.1.1-u1.30-230214-2.6 (utf8.uptex) (TeX Live 2024) (preloaded format=uplatex 2024.5.20)  14 JUL 2025 17:36
+entering extended mode
+ restricted \write18 enabled.
+ %&-line parsing enabled.
+**.tex
+(/usr/local/texlive/2024/texmf-dist/tex/latex/tools/.tex
+pLaTeX2e <2023-02-14u04>+1, based on
+LaTeX2e <2023-11-01> patch level 1
+L3 programming layer <2024-02-20>
+File ignored)
+*
+(Please type a command or say `\end')
+*\end
+
+*x
+
+! LaTeX Error: \begin{document} ended by \end{x}.
+
+See the LaTeX manual or LaTeX Companion for explanation.
+Type  H <return>  for immediate help.
+ ...                                              
+                                                  
+<*> x
+     
+? x
+ 
+Here is how much of TeX's memory you used:
+ 21 strings out of 474774
+ 646 string characters out of 5758802
+ 1918032 words of memory out of 5000000
+ 22486 multiletter control sequences out of 15000+600000
+ 560710 words of font info for 54 fonts, out of 8000000 for 9000
+ 929 hyphenation exceptions out of 8191
+ 15i,0n,23p,84b,18s stack positions out of 10000i,1000n,20000p,200000b,200000s
+No pages of output.
