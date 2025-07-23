@@ -930,6 +930,7 @@ struct ContentView: View {
     }
     
     func show_current(current:Int){
+        if records.count==0{return}
         id = records[current].id
         eibun = records[current].eibun
         wabun = records[current].wabun
@@ -1108,7 +1109,7 @@ struct ContentView: View {
             self.dao.select_book_page(book: book, page: Int(page)!)
         }
     }
-    private let options = ["入","出","印1","印2"]
+    private let options = ["CSV入力","CSV出力","分野(JSON出力)","話題(JSON出力)"]
     @State private var printAlert1 = false
     @State private var printAlert2 = false
     @State private var showAlert = false
@@ -1190,8 +1191,8 @@ struct ContentView: View {
                         Image(systemName: "gearshape").symbolRenderingMode(.monochrome)
                         //icon: do { Image(uiImage: ImageRenderer(content: Text("🏠")).uiImage!) }
                     }
-                    if(csvIOoption=="出"){
-                        Button(csvIOoption) {
+                    if(csvIOoption=="CSV出力"){
+                        Button("出") {
                             // ファイルをエクスポートするロジックを実装する
                             stringData = csv.CSVDataGen()
                             exportFile = true
@@ -1214,8 +1215,8 @@ struct ContentView: View {
                         onCancellation: {
                             print("cancel success")
                         }
-                    }else if(csvIOoption=="入"){
-                        Button(csvIOoption) {
+                    }else if(csvIOoption=="CSV入力"){
+                        Button("入") {
                             // ファイルをインポートするロジックを実装する
                             importFile = true
                             exportFile = false
@@ -1249,8 +1250,8 @@ struct ContentView: View {
                             } message: {
                                 Text("DBを作り直しますか？")
                             }
-                    }else if(csvIOoption=="印1"){
-                        Button("1"){printAlert1=true}
+                    }else if(csvIOoption=="分野(JSON出力)"){
+                        Button("分屋別"){printAlert1=true}
                             .alert("Print Random or All ?", isPresented: $printAlert1) {
                             Button("Random(10)") {
                                 okActionPrintRandom(sort:"field")
@@ -1264,8 +1265,8 @@ struct ContentView: View {
                         } message: {
                             Text("試験問題(分野別)生成しますか？")
                         }
-                    }else if(csvIOoption=="印2"){
-                        Button("2"){printAlert2=true}
+                    }else if(csvIOoption=="話題(JSON出力)"){
+                        Button("話題別"){printAlert2=true}
                             .alert("Print Random or All ?", isPresented: $printAlert2) {
                             Button("Random(10)") {
                                 okActionPrintRandom(sort:"topic")
