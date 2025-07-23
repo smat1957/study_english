@@ -1263,7 +1263,7 @@ struct ContentView: View {
                                 nothankyou()
                             }
                         } message: {
-                            Text("分野「"+selectedField+"」\nについて出問します")
+                            Text("分野「"+selectedField+"」\nについて出題します")
                         }
                     }else if(csvIOoption=="話題(JSON出力)"){
                         Button("話"){printAlert2=true}
