@@ -1251,34 +1251,34 @@ struct ContentView: View {
                                 Text("DBを作り直しますか？")
                             }
                     }else if(csvIOoption=="分野(JSON出力)"){
-                        Button("分屋別"){printAlert1=true}
-                            .alert("Print Random or All ?", isPresented: $printAlert1) {
+                        Button("分"){printAlert1=true}
+                            .alert("Random or Ascending ?", isPresented: $printAlert1) {
                             Button("Random(10)") {
                                 okActionPrintRandom(sort:"field")
                             }
-                            Button("Sequential(All)") {
+                            Button("Ascending(All)") {
                                 okActionPrintAll(sort:"field")
                             }
-                            Button("No, Thank you", role: .cancel) {
+                            Button("Cancel", role: .cancel) {
                                 nothankyou()
                             }
                         } message: {
-                            Text("試験問題(分野別)生成しますか？")
+                            Text("分野「"+selectedField+"」\nについて出問します")
                         }
                     }else if(csvIOoption=="話題(JSON出力)"){
-                        Button("話題別"){printAlert2=true}
-                            .alert("Print Random or All ?", isPresented: $printAlert2) {
+                        Button("話"){printAlert2=true}
+                            .alert("Random or Ascending ?", isPresented: $printAlert2) {
                             Button("Random(10)") {
                                 okActionPrintRandom(sort:"topic")
                             }
-                            Button("Sequential(All)") {
+                            Button("Ascending(All)") {
                                 okActionPrintAll(sort:"topic")
                             }
-                            Button("No, Thank you", role: .cancel) {
+                            Button("Cancel", role: .cancel) {
                                 nothankyou()
                             }
                         } message: {
-                            Text("試験問題(話題別)生成しますか？")
+                            Text("話題「"+selectedTopic+"」\nについて出題します")
                         }
                     }
 
