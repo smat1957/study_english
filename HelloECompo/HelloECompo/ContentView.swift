@@ -556,7 +556,8 @@ class CSV{
                                                    in: .allDomainsMask,
                                                    appropriateFor: nil,
                                                    create: false)
-            fileURL = path.appendingPathComponent("ECompoData.csv")
+            //fileURL = path.appendingPathComponent("ECompoData.csv")
+            fileURL = path.appendingPathComponent(getFName())
             // append string data to file
             try stringData.write(to: fileURL, atomically: true , encoding: .utf8)
             print(fileURL!)
@@ -697,6 +698,14 @@ class CSV{
 }
 
 class JSONRW {
+    var fname = "output"
+    init(fname: String = "output"){
+        self.fname = fname
+    }
+    func getFName() -> String {
+        return self.fname+".json"
+    }
+
     struct Book: Codable {
         let book: String
         let field: String
@@ -722,7 +731,7 @@ class JSONRW {
         let fileManager = FileManager.default
         let urls = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
         if let documentsDirectory = urls.first {
-            let fileURL = documentsDirectory.appendingPathComponent("output.json")
+            let fileURL = documentsDirectory.appendingPathComponent(getFName())
             do{
                 let jsonData = try encoder.encode(books)
                 try jsonData.write(to: fileURL)
@@ -840,7 +849,7 @@ extension UIApplication {
 struct ContentView: View {
     let dao = DAO()
     let csv = CSV(fname: "ECompoData")
-    let myjson = JSONRW()
+    let myjson = JSONRW(fname: "output")
     
     enum Field: Hashable {
         // https://dev.classmethod.jp/articles/focusstate-keyboard/
@@ -1233,7 +1242,6 @@ struct ContentView: View {
                                     let data: [[String]] = csv.reshape(url: file)
                                     self.importedData = data
                                     self.showAlert = true  // -> アラート表示トリガー
-
                                 case .failure(let error):
                                     print("Import error: \(error.localizedDescription)")
                                 }
