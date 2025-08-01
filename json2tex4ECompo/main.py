@@ -31,7 +31,7 @@ if __name__ == '__main__':
     end = '\\end{document}'
     vfill = '\\vfill'
     newpage = '\\newpage'
-    path = '/Users/mat/Documents/PycharmProjects/json2tex/'
+    path = '/Users/mat/Documents/PycharmProjects/json2tex4ECompo/'
     fname = sys.argv[1]+".tex"
     try:
         with open(path+fname, 'w', encoding='utf-8') as f:
@@ -60,7 +60,7 @@ if __name__ == '__main__':
             f.close()
     except IOError as e:
         print("ファイル書き込みエラー", e)
-    #path = '/Users/mat/Documents/PycharmProjects/json2tex/'
+    #path = '/Users/mat/Documents/PycharmProjects/json2tex4ECompo/'
     #result = subprocess.run('sh '+path+'do1.sh eisaku', shell=True, capture_output=True, text=True)
     #print(result.stdout)
     #result = subprocess.run('sh '+path+'do2.sh eisaku', shell=True, capture_output=True, text=True)
