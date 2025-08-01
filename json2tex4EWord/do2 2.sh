@@ -1,5 +1,5 @@
 #!/bin/sh
-cd /Users/mat/Documents/PycharmProjects/json2tex4ECompo
+cd /Users/mat/Documents/PycharmProjects/json2tex4EWord
 #open -a Skim "$1".pdf
 #/Applications/Skim.app/Contents/MacOS/Skim "$1".pdf
 open -a Skim "$1".pdf

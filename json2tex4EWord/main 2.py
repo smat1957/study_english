@@ -8,7 +8,7 @@ def json_load(path, fname):
     return books
 
 if __name__ == '__main__':
-    path = '/Users/mat/Documents/'
+    path = '/Users/mat/Library/Containers/jp.matoike.personal.HelloEWordMac/Data/Documents/'
     fname = 'output.json'
     books = json_load(path, fname)
     # 'numb'フィールドの値だけを取り出す

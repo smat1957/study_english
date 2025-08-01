@@ -52,7 +52,6 @@ class JSONRW {
             }
         }
     }
-
     func booksappend(book:String,stage:String,page:Int,numb:Int,word:String,mean:String,eibun:String,wabun:String) {
         let b = Book(book:book,stage:stage,page:page,numb:numb,word:word,mean:mean,eibun:eibun,wabun:wabun)
         books.append(b)
