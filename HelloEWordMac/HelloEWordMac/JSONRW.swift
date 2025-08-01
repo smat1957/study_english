@@ -8,7 +8,7 @@
 import SwiftUI
 
 class JSONRW {
-
+    
     var fname = "output"
     init(fname: String = "output"){
         self.fname = fname
@@ -16,7 +16,7 @@ class JSONRW {
     func getFName() -> String {
         return self.fname+".json"
     }
-
+    
     struct Book: Codable {
         let book: String
         let stage: String
@@ -68,10 +68,33 @@ class JSONRW {
                 jsonwrite()
                 //writeToFile(text: jsonString)
             }
-            //let cmdlineargs=["eisaku", sort]
-            //print( do_python(cmdlnargs: cmdlineargs) )
+            let cmdlineargs=["eitango", sort]
+            print( do_python(cmdlnargs: cmdlineargs) )
         } catch {
             print("JSONエンコードに失敗しました： \(error)")
         }
     }
+    func do_python(cmdlnargs: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        let path: String = "/Users/mat/Documents/PycharmProjects/json2tex4EWord/"
+        var strArray:[String] = [path + "do0.sh"]
+        strArray.append(contentsOf: cmdlnargs)
+        process.arguments = strArray
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        var output: String = ""
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            output = String(data: data, encoding: .utf8) ?? ""
+            //print("Python script output: \(output)")
+        } catch {
+            print("Error: \(error.localizedDescription)")
+            output = error.localizedDescription
+        }
+        return output
+    }
+
 }
