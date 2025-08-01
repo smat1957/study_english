@@ -241,7 +241,7 @@ struct ContentView: View {
                 eibun:words[n].eibun,
                 wabun:words[n].wabun
             )
-            print("Debug:",words[n].id, words[n].wabun)
+            print("Debug:",words[n].page, words[n].numb, words[n].wabun)
         }
         myjson.jsongen(sort:sort)
         printAlert = false
@@ -263,7 +263,7 @@ struct ContentView: View {
                 eibun:words[n].eibun,
                 wabun:words[n].wabun
             )
-            print("Debug",words[n].id, words[n].wabun)
+            print("Debug",words[n].page, words[n].numb, words[n].wabun)
         }
         myjson.jsongen(sort:sort)
         printAlert = false

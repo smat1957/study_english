@@ -56,10 +56,10 @@ class JSONRW {
         let b = Book(book:book,stage:stage,page:page,numb:numb,word:word,mean:mean,eibun:eibun,wabun:wabun)
         books.append(b)
     }
-    func jsongen(sort: String){
-        jsongen(books: books, sort:sort)
+    func jsongen(){
+        jsongen(books: books)
     }
-    func jsongen(books: [Book], sort: String){
+    func jsongen(books: [Book]){
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
@@ -68,7 +68,7 @@ class JSONRW {
                 jsonwrite()
                 //writeToFile(text: jsonString)
             }
-            let cmdlineargs=["eitango", sort]
+            let cmdlineargs=["eitango"]
             print( do_python(cmdlnargs: cmdlineargs) )
         } catch {
             print("JSONエンコードに失敗しました： \(error)")

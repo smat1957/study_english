@@ -208,7 +208,7 @@ struct ContentView: View {
         let selected = Array(shuffled.prefix(count))
         return selected
     }
-    func okActionPrintRandom(sort:String){
+    func okActionPrintRandom(){
         self.dao.select_book_page2(book: selectedbook, from_page: Int(npage)!, to_page: Int(npage)!+2)
         let num_of_records=words.count
         let randomNumbers = pickRandomNumbers(from: num_of_records, count: num_of_records)
@@ -226,11 +226,11 @@ struct ContentView: View {
             )
             print("Debug:",words[n].id, words[n].wabun)
         }
-        myjson.jsongen(sort:sort)
+        myjson.jsongen()
         printAlert = false
     }
     
-    func okActionPrintAll(sort:String){
+    func okActionPrintAll(){
         self.dao.select_book_page2(book: selectedbook, from_page: Int(npage)!, to_page: Int(npage)!+2)
         let num_of_records=words.count
         //let randomNumbers = pickRandomNumbers(from: num_of_records, count: num_of_records)
@@ -248,7 +248,7 @@ struct ContentView: View {
             )
             print("Debug",words[n].id, words[n].wabun)
         }
-        myjson.jsongen(sort:sort)
+        myjson.jsongen()
         printAlert = false
     }
 
@@ -753,10 +753,10 @@ struct ContentView: View {
                 Button("JSON出力"){printAlert=true}
                     .alert("Random or Ascending ?", isPresented: $printAlert) {
                     Button("Random(All)") {
-                        okActionPrintRandom(sort:"field")
+                        okActionPrintRandom()
                     }
                     Button("Ascending(All)") {
-                        okActionPrintAll(sort:"field")
+                        okActionPrintAll()
                     }
                     Button("Cancel", role: .cancel) {
                         nothankyou()
