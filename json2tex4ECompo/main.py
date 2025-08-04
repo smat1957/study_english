@@ -11,6 +11,16 @@ if __name__ == '__main__':
     path = '/Users/mat/Documents/'
     fname = 'output.json'
     books = json_load(path, fname)
+    # 'numb'フィールドの値だけを取り出す
+    numb_values = [item['line'] for item in books if 'line' in item and isinstance(item['line'], int)]
+    # 最小値と最大値を求める
+    min_numb = str(min(numb_values))
+    max_numb = str(max(numb_values))
+    if numb_values:
+        print(f"最小値: {min(numb_values)}, 最大値: {max(numb_values)}")
+    else:
+        print("有効な 'numb' フィールドが見つかりませんでした。")
+    #
     encode = '% latex uft-8'
     header = '\\documentclass[uplatex,dvipdfmx,a4paper,10pt,oneside,openany]{jsarticle}'
     package = '\\usepackage{fancyhdr}'
@@ -53,7 +63,7 @@ if __name__ == '__main__':
                     f.write("(P." + str(item['page']) + ", L." + str(item['line']) + "：" + item['topic'] + "："+item['title']+")" + item[
                         'wabun'] + '\n')
                 f.write(vfill + '\n')
-                if i%5==0:
+                if i%(len(books)//2)==0:
                     f.write(newpage + '\n')
                 i += 1
             f.write(end + '\n')

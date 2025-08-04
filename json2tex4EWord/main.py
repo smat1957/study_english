@@ -56,7 +56,7 @@ if __name__ == '__main__':
             for item in books:
                 f.write("(P." + str(item['page']) + ", L." + str(item['numb']) + ")" + item['wabun'] + '\n')
                 f.write(vfill + '\n')
-                if i%12==0:
+                if i%(len(books)//2)==0:
                     f.write(newpage + '\n')
                 i += 1
             f.write(end + '\n')
