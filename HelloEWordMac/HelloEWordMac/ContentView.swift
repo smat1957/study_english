@@ -26,7 +26,7 @@ struct ContentView: View {
         books = self.dao.distinct(field_name: "book")
     }
     private let searchobjs = ["全","本","章","頁","番","語","W"]
-    private var books = ["超上級英英単","1級パス単","1級単熟語Ex","上級英英単","準1級パス単","準1級単熟語Ex","入試ターゲット","入試シス単"]
+    @State private var books = ["超上級英英単","1級パス単","1級単熟語Ex","上級英英単","準1級パス単","準1級単熟語Ex","入試ターゲット","入試シス単"]
     private let types = ["noun","verb","adjective","adverb","preposition"]
     private let stages = ["1","2","3","4","5","6","7","8","9","10"]
     private let seqs = ["ー","①","②","③","④","⑤"]
@@ -730,6 +730,7 @@ struct ContentView: View {
                                     dao.insert_fromcsv(data: csvdata)
                                 }
                             }
+                            self.books = dao.distinct(field_name: "book")
                             self.showAlert = false
                         }
                         Button("No", role: .cancel) {
