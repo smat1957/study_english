@@ -387,7 +387,6 @@ struct ContentView: View {
                                         dao.insert_fromcsv(data: csvdata)
                                     }
                                 }
-                                self.books = dao.distinct(field_name: "book")
                                 self.showAlert = false
                             }
                             Button("No", role: .cancel) {
@@ -431,6 +430,7 @@ struct ContentView: View {
             HStack{
                 //Spacer()
                 Button("検索") {
+                    self.books = dao.distinct(field_name: "book")
                     let book:String = selectedbook
                     //let curr:Int = current
                     /*

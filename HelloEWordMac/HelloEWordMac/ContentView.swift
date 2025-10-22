@@ -264,6 +264,7 @@ struct ContentView: View {
                 //Spacer()
                 Button("検索") {
                     //words.removeAll()
+                    self.books = dao.distinct(field_name: "book")
                     var book:String = ""
                     book = selectedbook
                     //var stage:String = ""
@@ -730,7 +731,6 @@ struct ContentView: View {
                                     dao.insert_fromcsv(data: csvdata)
                                 }
                             }
-                            self.books = dao.distinct(field_name: "book")
                             self.showAlert = false
                         }
                         Button("No", role: .cancel) {
