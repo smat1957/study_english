@@ -630,7 +630,7 @@ struct ContentView: View {
                                 Text($0)
                             }
                         }.pickerStyle(.menu)
-                            .frame(width: .infinity)
+                            .frame(width: 160) //.frame(width: .infinity)
                             .clipped()
                             .contentShape(Rectangle())
                             //.onChange(of: selectedBook) { newValue in
@@ -639,18 +639,20 @@ struct ContentView: View {
                                 if selectedBook.isEmpty {
                                     isDisableBook = true
                                 } else {
-                                    //selectedSearch = "本"
-                                    self.dao.select_book(book: selectedBook)
-                                    if records.count>0{
-                                        current=0
-                                        show_current(current:current)
-                                    }else if records.count==0{
-                                        records.removeAll()
-                                        current = 0
-                                        sizeofRecords = 0
-                                        clear_fields()
+                                    if selectedSearch != searchObjs[0] {
+                                        //selectedSearch = "本"
+                                        self.dao.select_book(book: selectedBook)
+                                        if records.count>0{
+                                            current=0
+                                            show_current(current:current)
+                                        }else if records.count==0{
+                                            records.removeAll()
+                                            current = 0
+                                            sizeofRecords = 0
+                                            clear_fields()
+                                        }
+                                        isDisableBook = false
                                     }
-                                    isDisableBook = false
                                 }
                             }
                     }
