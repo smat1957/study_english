@@ -74,6 +74,11 @@ class DAO:SQLite3{
             if (3<i)&&(i<7){
                 bindInt(index: i, value: Int(data[i])!)
             }else{
+                /*
+                 Yes selected
+                 dao!-> /Users/mat/Documents/ecompo_sqlite3
+                 Swift/ContiguousArrayBuffer.swift:690: Fatal error: Index out of range
+                 */
                 bindText(index: i, value: String(data[i]))
             }
         }

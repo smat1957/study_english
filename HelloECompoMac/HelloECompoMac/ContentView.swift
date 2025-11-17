@@ -588,13 +588,14 @@ struct ContentView: View {
                         TextField("本", text: $book, axis: .vertical)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .border(Color.gray)
+                            .font(.system(size: 18))
                             //.autocapitalization(.none)
                             //.keyboardType(.default)
                             .disableAutocorrection(true)
                     }else{
                         Picker(selection:$selectedBook, label: Text("本")) {
                             ForEach (Books, id: \.self) {
-                                Text($0)
+                                Text($0).font(.system(size: 18))
                             }
                         }.pickerStyle(.menu)
                             .frame(width: .infinity)
@@ -604,17 +605,19 @@ struct ContentView: View {
                                 if newValue.isEmpty {
                                     isDisable = true
                                 } else {
-                                    self.dao.select_book(book: selectedBook)
-                                    if records.count>0{
-                                        current=0
-                                        show_current(current:current)
-                                    }else if records.count==0{
-                                        records.removeAll()
-                                        current = 0
-                                        sizeofRecords = 0
-                                        clear_fields()
+                                    if selectedSearch != searchObjs[0] {
+                                        self.dao.select_book(book: selectedBook)
+                                        if records.count>0{
+                                            current=0
+                                            show_current(current:current)
+                                        }else if records.count==0{
+                                            records.removeAll()
+                                            current = 0
+                                            sizeofRecords = 0
+                                            clear_fields()
+                                        }
+                                        isDisable = false
                                     }
-                                    isDisable = false
                                 }
                             }
                     }
@@ -627,6 +630,7 @@ struct ContentView: View {
                             TextField("分野", text: $field, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .border(Color.gray)
+                                .font(.system(size: 18))
                                 //.autocapitalization(.none)
                                 //.keyboardType(.default)
                                 .disableAutocorrection(true)
@@ -634,7 +638,8 @@ struct ContentView: View {
                         }else{
                             Picker(selection:$selectedField, label: Text("分野")) {
                                 ForEach (Fields, id: \.self) {
-                                    Text($0).font(.subheadline)
+                                    //Text($0).font(.subheadline)
+                                    Text($0).font(.system(size: 18))
                                 }
                             }
                             .pickerStyle(.menu)
@@ -650,13 +655,15 @@ struct ContentView: View {
                             TextField("話題", text: $topic, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .border(Color.gray)
+                                .font(.system(size: 18))
                                 //.autocapitalization(.none)
                                 //.keyboardType(.default)
                                 .disableAutocorrection(true)
                         }else{
                             Picker(selection:$selectedTopic, label: Text("話題")) {
                                 ForEach (Topics, id: \.self) {
-                                    Text($0).font(.subheadline)
+                                    //Text($0).font(.subheadline)
+                                    Text($0).font(.system(size: 18))
                                 }
                             }.pickerStyle(.menu)
                                 .frame(width: .infinity, height: 38)
@@ -671,13 +678,15 @@ struct ContentView: View {
                             TextField("題目", text: $title, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .border(Color.gray)
+                                .font(.system(size: 18))
                                 //.autocapitalization(.none)
                                 //.keyboardType(.default)
                                 .disableAutocorrection(true)
                         }else{
                             Picker(selection:$selectedTitle, label: Text("題目")) {
                                 ForEach (Titles, id: \.self) {
-                                    Text($0).font(.subheadline)
+                                    //Text($0).font(.subheadline)
+                                    Text($0).font(.system(size: 18))
                                 }
                             }.pickerStyle(.menu)
                                 .frame(width: .infinity, height: 38)
@@ -703,7 +712,7 @@ struct ContentView: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 10)
                                             .stroke(Color.blue, lineWidth: 1)
-                                    ).font(.system(size: 15))
+                                    ).font(.system(size: 18))
                                 /*
                                 // 表示
                                 Text(wabun)
@@ -765,7 +774,7 @@ struct ContentView: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 10)
                                             .stroke(Color.blue, lineWidth: 1)
-                                    ).font(.system(size: 15))
+                                    ).font(.system(size: 18))
                                 /*
                                 // 表示
                                 Text(wabun)
@@ -828,7 +837,7 @@ struct ContentView: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 10)
                                             .stroke(Color.blue, lineWidth: 1)
-                                    ).font(.system(size: 15))
+                                    ).font(.system(size: 18))
                                 /*
                                 // 表示
                                 Text(wabun)
