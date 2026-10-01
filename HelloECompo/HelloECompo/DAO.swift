@@ -114,14 +114,17 @@ final class DAO: SQLite3 {
         }
     }
 
-    func distinct(field_name: String, book: String? = nil) throws -> [String] {
+    func distinct(field_name: String, book: String? = nil, field: String? = nil, topic: String? = nil) throws -> [String] {
         guard ["book", "field", "topic", "title"].contains(field_name) else {
             throw DataError.invalid("検索項目が不正です。")
         }
         defer { finalizeStatement() }
-        let filter = book == nil ? "" : " WHERE book=?"
+        let filters = [("book", book), ("field", field), ("topic", topic)].compactMap { name, value in
+            value.map { (name, $0) }
+        }
+        let filter = filters.isEmpty ? "" : " WHERE " + filters.map { "COALESCE(\($0.0),'')=?" }.joined(separator: " AND ")
         try prepare("SELECT DISTINCT COALESCE(\(field_name),'') FROM ecompo\(filter) ORDER BY 1")
-        if let book = book { try bindText(index: 1, value: book) }
+        for (index, entry) in filters.enumerated() { try bindText(index: index + 1, value: entry.1) }
         var values: [String] = []
         while try step() == SQLITE_ROW { values.append(columnText(index: 0)) }
         return values
@@ -152,6 +155,20 @@ final class DAO: SQLite3 {
         if let book = book { try bindText(index: 1, value: book) }
         if let text = text { try bindText(index: 2, value: text) }
         if let number = number { try bindInt(index: 2, value: number) }
+        return try readRecords()
+    }
+
+    func select_hierarchy(book: String, field: String, topic: String, title: String? = nil) throws -> [Record] {
+        defer { finalizeStatement() }
+        var filters = [("book", book), ("field", field), ("topic", topic)]
+        if let title = title { filters.append(("title", title)) }
+        let condition = filters.map { "COALESCE(\($0.0),'')=?" }.joined(separator: " AND ")
+        try prepare("SELECT \(columns) FROM ecompo WHERE " + condition + order)
+        for (index, entry) in filters.enumerated() { try bindText(index: index + 1, value: entry.1) }
+        return try readRecords()
+    }
+
+    private func readRecords() throws -> [Record] {
         var result: [Record] = []
         while try step() == SQLITE_ROW {
             var fields = [String(columnInt(index: 0))]

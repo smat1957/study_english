@@ -74,7 +74,7 @@ struct ContentView: View {
     @State private var eibun: String = ""
     @State private var hint: String = ""
     @State private var description: String = ""
-    @State private var isWabun: Bool = false
+    @State private var isWabun: Bool = true
     @State private var isEibun: Bool = false
     @State private var isHint: Bool = false
     @State private var book: String = ""
@@ -129,12 +129,46 @@ struct ContentView: View {
         catch { report(error) }
     }
 
+    private var browsingStateKey: String { "HelloECompo.browsingState.v1" }
+
+    func saveBrowsingState() {
+        guard initialized else { return }
+        let state = SavedBrowsingState(scope: selectedSearch, book: selectedBook,
+            field: selectedField, topic: selectedTopic, title: selectedTitle,
+            page: page, recordID: id, index: current)
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(state), forKey: browsingStateKey)
+        } catch {
+            print("閲覧状態の保存エラー: \(error.localizedDescription)")
+        }
+    }
+
     func initialize() {
         guard !initialized else { return }
         perform {
             try dao.initial()
-            try display(dao.select_all())
+            let saved = UserDefaults.standard.data(forKey: browsingStateKey)
+                .flatMap { try? JSONDecoder().decode(SavedBrowsingState.self, from: $0) }
+            if let saved = saved, ["全", "本", "分野", "話題", "題目", "頁"].contains(saved.scope) {
+                selectedSearch = saved.scope
+                selectedBook = saved.book
+                selectedField = saved.field
+                selectedTopic = saved.topic
+                selectedTitle = saved.title
+                page = saved.page
+                let restored = try searchResults()
+                if restored.isEmpty {
+                    // A removed book/filter cannot be restored; return to available records.
+                    selectedSearch = "全"
+                    try display(dao.select_all())
+                } else {
+                    try display(restored, preferredID: saved.recordID, index: saved.index)
+                }
+            } else {
+                try display(dao.select_all())
+            }
             initialized = true
+            saveBrowsingState()
         }
     }
 
@@ -153,9 +187,13 @@ struct ContentView: View {
         let record = result.isEmpty ? nil : result[selectedIndex]
         let books = try dao.distinct(field_name: "book")
         let nextBook = record?.book ?? (books.contains(selectedBook) ? selectedBook : books.first ?? "")
-        let titles = try dao.distinct(field_name: "title", book: nextBook)
-        let topics = try dao.distinct(field_name: "topic", book: nextBook)
         let fields = try dao.distinct(field_name: "field", book: nextBook)
+        let nextField = record?.field ?? (fields.contains(selectedField) ? selectedField : fields.first ?? "")
+        let topics = try dao.distinct(field_name: "topic", book: nextBook, field: nextField)
+        let nextTopic = record?.topic ?? (topics.contains(selectedTopic) ? selectedTopic : topics.first ?? "")
+        let titles = try dao.distinct(field_name: "title", book: nextBook, field: nextField, topic: nextTopic)
+        // Persist only after all queries succeeded, and after every displayed value is updated.
+        defer { saveBrowsingState() }
         records = result
         current = selectedIndex
         sizeofRecords = result.count
@@ -166,8 +204,8 @@ struct ContentView: View {
         selectedBook = nextBook
         guard let record = record else {
             clear_fields()
-            selectedField = fields.first ?? ""
-            selectedTopic = topics.first ?? ""
+            selectedField = nextField
+            selectedTopic = nextTopic
             selectedTitle = titles.first ?? ""
             return
         }
@@ -204,8 +242,8 @@ struct ContentView: View {
         perform {
             let record: Record
             if isNew {
-                record = try Record(data: ["0", "", "", "", "0", "0", "0",
-                                           "", "", "", selectedBook, ""])
+                record = try Record(data: ["0", "", "", "", "0", page, chap,
+                                           selectedTitle, selectedTopic, selectedField, selectedBook, ""])
             } else {
                 guard records.indices.contains(current) else {
                     throw DataError.invalid("編集するデータがありません。")
@@ -276,8 +314,8 @@ struct ContentView: View {
         case "全": return try dao.select_all()
         case "本": return try dao.select_book(book: selectedBook)
         case "分野": return try dao.select_book_field(book: selectedBook, field: selectedField)
-        case "話題": return try dao.select_book_topic(book: selectedBook, topic: selectedTopic)
-        case "題目": return try dao.select_book_title(book: selectedBook, title: selectedTitle)
+        case "話題": return try dao.select_hierarchy(book: selectedBook, field: selectedField, topic: selectedTopic)
+        case "題目": return try dao.select_hierarchy(book: selectedBook, field: selectedField, topic: selectedTopic, title: selectedTitle)
         case "頁":
             return try dao.select_book_page(book: selectedBook, page: Record.number(page, name: "頁"))
         default: throw DataError.invalid("検索条件が不正です。")
@@ -330,8 +368,8 @@ struct ContentView: View {
         finishEditing()
         do {
             // Reload choices from the committed database; replacement leaves only imported books.
-            try display(dao.select_book(book: targetBook))
             selectedSearch = "本"
+            try display(dao.select_book(book: targetBook))
         } catch {
             // The import already committed; do not suggest retrying it and duplicating records.
             report(DataError.database("取り込みは完了しましたが、本の一覧の再読込に失敗しました。アプリを開き直してください。\n" + error.localizedDescription))
@@ -400,12 +438,13 @@ struct ContentView: View {
         selectedField = ""; selectedTopic = ""; selectedTitle = ""
         Books = [""]; Fields = [""]; Topics = [""]; Titles = [""]
         clear_fields()
-        isWabun = false; isEibun = false; isHint = false
+        isWabun = true; isEibun = false; isHint = false
         importedData = []
         stringData = ""
         pendingTransfer = nil
         pendingImportConfirmation = false
         finishEditing()
+        saveBrowsingState()
     }
 
     func beginTransfer(_ direction: DataTransferDirection) {
@@ -427,8 +466,8 @@ struct ContentView: View {
             case "全": output = try dao.select_all()
             case "本": output = try dao.select_book(book: context.book)
             case "分野": output = try dao.select_book_field(book: context.book, field: context.field)
-            case "話題": output = try dao.select_book_topic(book: context.book, topic: context.topic)
-            case "題目": output = try dao.select_book_title(book: context.book, title: context.title)
+            case "話題": output = try dao.select_hierarchy(book: context.book, field: context.field, topic: context.topic)
+            case "題目": output = try dao.select_hierarchy(book: context.book, field: context.field, topic: context.topic, title: context.title)
             case "頁": output = try dao.select_book_page(book: context.book,
                 page: Record.number(context.page, name: "頁"))
             default: throw DataError.invalid("エクスポートの検索対象が不正です。")
@@ -912,8 +951,8 @@ struct DataTransferOptionsView: View {
                         }
                         .pickerStyle(.menu)
                         if scope != "全" { LabeledContent("本", value: context.book) }
-                        if scope == "分野" { LabeledContent("分野", value: context.field) }
-                        if scope == "話題" { LabeledContent("話題", value: context.topic) }
+                        if ["分野", "話題", "題目"].contains(scope) { LabeledContent("分野", value: context.field) }
+                        if ["話題", "題目"].contains(scope) { LabeledContent("話題", value: context.topic) }
                         if scope == "題目" { LabeledContent("題目", value: context.title) }
                         if scope == "頁" { LabeledContent("頁", value: context.page) }
                     } header: {
@@ -1030,6 +1069,18 @@ struct ImportBookSelectionView: View {
             }
         }
     }
+}
+
+/// Save filters and stable record identity, rather than a copy of the database contents.
+struct SavedBrowsingState: Codable {
+    let scope: String
+    let book: String
+    let field: String
+    let topic: String
+    let title: String
+    let page: String
+    let recordID: Int
+    let index: Int
 }
 
 #Preview {
