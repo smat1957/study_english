@@ -93,6 +93,8 @@ struct ContentView: View {
     @State private var exportFile: Bool = false
     @State private var importFile: Bool = false
     @State private var transferSession: DataTransferSession?
+    @State private var importBookSession: ImportBookSession?
+    @State private var pendingImportConfirmation = false
     @State private var transferFormat: DataTransferFormat = .json
     @State private var pendingTransfer: DataTransferDirection?
     @State private var isDisableBook: Bool = false
@@ -304,19 +306,35 @@ struct ContentView: View {
     }
 
     enum MenuConfirmation {
-        case delete, importRecords
+        case delete, importRecords, reset
     }
     @State private var menuConfirmation: MenuConfirmation = .delete
     @State private var showMenuConfirmation = false
     @State private var importedData: [Record] = []
 
     func processImport(replacing: Bool) {
-        perform {
+        // Keep the imported book names before clearing the temporary input.
+        let importedBooks = Set(importedData.map { $0.book })
+        guard let firstBook = importedData.first?.book else {
+            report(DataError.invalid("取り込むデータがありません。"))
+            return
+        }
+        let targetBook = importedBooks.contains(selectedBook) ? selectedBook : firstBook
+        do {
             try dao.importRecords(importedData, replacing: replacing)
-            importedData = []
-            finishEditing()
-            selectedSearch = "全"
-            try display(dao.select_all())
+        } catch {
+            report(error)
+            return
+        }
+        importedData = []
+        finishEditing()
+        do {
+            // Reload choices from the committed database; replacement leaves only imported books.
+            try display(dao.select_book(book: targetBook))
+            selectedSearch = "本"
+        } catch {
+            // The import already committed; do not suggest retrying it and duplicating records.
+            report(DataError.database("取り込みは完了しましたが、本の一覧の再読込に失敗しました。アプリを開き直してください。\n" + error.localizedDescription))
         }
     }
 
@@ -350,16 +368,51 @@ struct ContentView: View {
     }
 
     var confirmationTitle: String {
-        menuConfirmation == .delete ? "Delete?" : "インポート"
+        switch menuConfirmation {
+        case .delete: return "Delete?"
+        case .importRecords: return "インポート"
+        case .reset: return "アプリ内のデータを初期化しますか？"
+        }
     }
 
     var confirmationMessage: String {
-        menuConfirmation == .delete
-            ? "id=\(id), sentence=\(eibun)"
-            : "\(importedData.count)件を取り込みます。既存データを置き換えますか、追記しますか？"
+        switch menuConfirmation {
+        case .delete: return "id=\(id), sentence=\(eibun)"
+        case .importRecords:
+            return "選択した本の\(importedData.count)件を取り込みます。追記、またはDB全体の置き換えを選んでください。「置き換え」は既存のすべての本・記事を削除し、選択した本のデータだけを保存します。"
+        case .reset:
+            return "すべての本・記事を削除します。この操作は取り消せません。初期化後はNewから手入力で登録できます。書き出したJSON・CSVファイルは削除しません。"
+        }
+    }
+
+    func resetAppData() {
+        do { try dao.clearAllRecords() }
+        catch {
+            report(error)
+            return
+        }
+        // Clear the screen after the transaction commits, even if a later reload would fail.
+        records = []
+        current = 0
+        sizeofRecords = 0
+        selectedSearch = "全"
+        selectedBook = ""
+        selectedField = ""; selectedTopic = ""; selectedTitle = ""
+        Books = [""]; Fields = [""]; Topics = [""]; Titles = [""]
+        clear_fields()
+        isWabun = false; isEibun = false; isHint = false
+        importedData = []
+        stringData = ""
+        pendingTransfer = nil
+        pendingImportConfirmation = false
+        finishEditing()
     }
 
     func beginTransfer(_ direction: DataTransferDirection) {
+        if direction == .import {
+            importedData = []
+            pendingImportConfirmation = false
+        }
         transferSession = DataTransferSession(direction: direction,
             context: ExportContext(scope: selectedSearch, book: selectedBook,
                                    field: selectedField, topic: selectedTopic,
@@ -420,6 +473,13 @@ struct ContentView: View {
                     beginTransfer(.import)
                 }
             }
+            Section {
+                Button(role: .destructive) {
+                    requestConfirmation(.reset)
+                } label: {
+                    Label("初期化", systemImage: "arrow.counterclockwise")
+                }
+            }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 23, weight: .semibold))
@@ -435,12 +495,13 @@ struct ContentView: View {
             case .success(let files):
                 guard let file = files.first else { return }
                 perform {
+                    let loaded: [Record]
                     if transferFormat == .json {
-                        importedData = try myjson.read(url: file)
+                        loaded = try myjson.read(url: file)
                     } else {
-                        importedData = try csv.reshape(url: file)
+                        loaded = try csv.reshape(url: file)
                     }
-                    requestConfirmation(.importRecords)
+                    importBookSession = ImportBookSession(records: loaded)
                 }
             case .failure(let error): report(error)
             }
@@ -460,6 +521,8 @@ struct ContentView: View {
             case .importRecords:
                 Button("置き換え", role: .destructive) { processImport(replacing: true) }
                 Button("追記") { processImport(replacing: false) }
+            case .reset:
+                Button("すべて削除して初期化", role: .destructive) { resetAppData() }
             }
             Button("Cancel", role: .cancel) { importedData = [] }
         } message: {
@@ -507,6 +570,8 @@ struct ContentView: View {
                 .padding(.vertical, 12)
                 .contentShape(Rectangle())
             }
+            // Recreate the native menu when the available book names change.
+            .id(Books)
             .accessibilityLabel("本")
             .accessibilityValue(selectedBook)
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .trailing)
@@ -612,6 +677,19 @@ struct ContentView: View {
                 DataTransferOptionsView(direction: session.direction, context: session.context) { format, scope in
                     try prepareTransfer(session.direction, format: format,
                                         scope: scope, context: session.context)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $importBookSession, onDismiss: {
+                if pendingImportConfirmation {
+                    pendingImportConfirmation = false
+                    requestConfirmation(.importRecords)
+                }
+            }) { session in
+                ImportBookSelectionView(records: session.records) { selected in
+                    importedData = selected
+                    pendingImportConfirmation = true
                 }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -845,7 +923,7 @@ struct DataTransferOptionsView: View {
                     }
                 } else {
                     Section {
-                        Text("次の画面でファイルを選択します。読み込み後に、既存データへの追記または置き換えを選べます。")
+                        Text("次の画面でファイルを選択します。読み込み後に取り込む本を選び、追記またはDB全体の置き換えを選べます。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -877,6 +955,80 @@ struct DataTransferOptionsView: View {
             submitted = true
             dismiss()
         } catch { errorMessage = error.localizedDescription }
+    }
+}
+
+struct ImportBookSession: Identifiable {
+    let id = UUID()
+    let records: [Record]
+}
+
+struct ImportBookSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedBooks: Set<String> = []
+    @State private var submitted = false
+    let records: [Record]
+    let onSelect: ([Record]) -> Void
+
+    private var books: [String] {
+        Array(Set(records.map { $0.book })).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    private var selectedRecords: [Record] {
+        records.filter { selectedBooks.contains($0.book) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(books, id: \.self) { book in
+                        Button {
+                            if selectedBooks.contains(book) { selectedBooks.remove(book) }
+                            else { selectedBooks.insert(book) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedBooks.contains(book)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(Color.accentColor)
+                                Text(book.isEmpty ? "（本の名前なし）" : book)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Text("\(records.filter { $0.book == book }.count)件")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityValue(selectedBooks.contains(book) ? "選択中" : "未選択")
+                    }
+                } header: {
+                    Text("ファイル内の本（複数選択可）")
+                } footer: {
+                    Text("選択した本のデータだけを取り込みます。選択中：\(selectedBooks.count)冊・\(selectedRecords.count)件")
+                }
+            }
+            .navigationTitle("取り込む本を選択")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("次へ") {
+                        guard !submitted, !selectedBooks.isEmpty else { return }
+                        submitted = true
+                        onSelect(selectedRecords)
+                        dismiss()
+                    }
+                    .disabled(selectedBooks.isEmpty || submitted)
+                }
+            }
+        }
     }
 }
 

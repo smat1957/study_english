@@ -98,10 +98,17 @@ final class DAO: SQLite3 {
         }
     }
 
+    func clearAllRecords() throws {
+        try transaction {
+            try exec("DELETE FROM ecompo")
+        }
+    }
+
     func importRecords(_ records: [Record], replacing: Bool) throws {
         guard !records.isEmpty else { throw DataError.invalid("取り込むデータがありません。") }
         try transaction {
-            // Keep the table and its schema; rollback restores all existing rows on failure.
+            // Replacement applies to the entire database, using only the selected input records.
+            // The transaction restores the previous data if any insert or commit fails.
             if replacing { try exec("DELETE FROM ecompo") }
             for record in records { try insert(record) }
         }
