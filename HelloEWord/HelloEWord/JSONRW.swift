@@ -1,23 +1,7 @@
-//
-//  JSONRW.swift
-//  HelloEWord
-//
-//  Created by 的池秋成 on 2025/08/01.
-//
+import Foundation
 
-import SwiftUI
-
-class JSONRW {
-
-    var fname = "output"
-    init(fname: String = "output"){
-        self.fname = fname
-    }
-    func getFName() -> String {
-        return self.fname+".json"
-    }
-
-    struct Book: Codable {
+final class JSONRW {
+    struct Question: Encodable {
         let book: String
         let stage: String
         let page: Int
@@ -26,52 +10,30 @@ class JSONRW {
         let mean: String
         let eibun: String
         let wabun: String
+        init(_ record: Words) {
+            book = record.book; stage = record.stage; page = record.page; numb = record.numb
+            word = record.word; mean = record.mean; eibun = record.eibun; wabun = record.wabun
+        }
     }
-    var books = [
-        Book(book:"",stage:"",page:0,numb:0,word:"",mean:"",eibun:"",wabun:""),
-        Book(book:"",stage:"",page:0,numb:0,word:"",mean:"",eibun:"",wabun:"")
-    ]
-    func initial(){
-        books = []
-    }
-    func jsonwrite(){
-        jsonwrite(books:books)
-    }
-    func jsonwrite(books: [Book]){
+
+    func generate(records: [Words], questionsOnly: Bool = false) throws -> String {
         let encoder = JSONEncoder()
-        let fileManager = FileManager.default
-        let urls = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
-        if let documentsDirectory = urls.first {
-            let fileURL = documentsDirectory.appendingPathComponent(getFName())
-            do{
-                let jsonData = try encoder.encode(books)
-                try jsonData.write(to: fileURL)
-                print("保存成功： \(fileURL.path)")
-            }catch {
-                print("保存エラー： \(error)")
-            }
-        }
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = questionsOnly ? try encoder.encode(records.map(Question.init)) : try encoder.encode(records)
+        guard let text = String(data: data, encoding: .utf8) else { throw DataError.invalid("JSONを生成できません。") }
+        return text
     }
-    func booksappend(book:String,stage:String,page:Int,numb:Int,word:String,mean:String,eibun:String,wabun:String) {
-        let b = Book(book:book,stage:stage,page:page,numb:numb,word:word,mean:mean,eibun:eibun,wabun:wabun)
-        books.append(b)
+
+    func read(url: URL) throws -> [Words] {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        return try parse(Data(contentsOf: url))
     }
-    func jsongen(sort: String){
-        jsongen(books: books, sort:sort)
-    }
-    func jsongen(books: [Book], sort: String){
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = .prettyPrinted
-            let jsonData = try encoder.encode(books)
-            if String(data: jsonData, encoding: .utf8) != nil {
-                jsonwrite()
-                //writeToFile(text: jsonString)
-            }
-            //let cmdlineargs=["eisaku", sort]
-            //print( do_python(cmdlnargs: cmdlineargs) )
-        } catch {
-            print("JSONエンコードに失敗しました： \(error)")
-        }
+
+    func parse(_ data: Data) throws -> [Words] {
+        let records = try JSONDecoder().decode([Words].self, from: data)
+        guard !records.isEmpty else { throw DataError.invalid("JSONに取り込めるデータがありません。") }
+        for record in records { try record.validate() }
+        return records
     }
 }
