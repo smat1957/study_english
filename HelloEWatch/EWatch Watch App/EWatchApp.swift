@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct EWatch_Watch_AppApp: App {
+    @StateObject private var connector = PhoneConnector()
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(connector)
         }
     }
 }
