@@ -1,177 +1,94 @@
-//
-//  CSV.swift
-//  HelloECompo
-//
-//  Created by 的池秋成 on 2025/08/01.
-//
-import SwiftUI
+import Foundation
 
-class CSV{
+final class CSV {
+    let fname: String
+    private static let header = ["ID", "英文", "和文", "ヒント", "行", "頁", "章", "題目", "主題", "分野", "本", "備考"]
 
-    var fname = "ECompoData"
-    init(fname: String = "ECompoData"){
-        self.fname = fname
-    }
-    func getFName() -> String {
-        return self.fname+".csv"
+    init(fname: String = "ECompoData") { self.fname = fname }
+    func getFName() -> String { fname + ".csv" }
+
+    func CSVDataGen(records: [Record]) -> String {
+        func quote(_ value: String) -> String {
+            "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        let rows = records.map { $0.csvFields.map(quote).joined(separator: ",") }
+        return ([Self.header.joined(separator: ",")] + rows).joined(separator: "\r\n") + "\r\n"
     }
 
-    func CSVDataGen() -> String{
-        // heading of CSV file.
-        let heading = "ID,英文,和文,ヒント,行,頁,章,題目,主題,分野,本,備考 \n"
-        // file rows
-        //id, eibun, wabun, hint, line, page, chap, title, topic, field, book, description
-        let rows = records.map { "\($0.id),\"\($0.eibun)\",\"\($0.wabun)\",\"\($0.hint)\",\($0.line),\($0.page),\($0.chap),\"\($0.title)\",\"\($0.topic)\",\"\($0.field)\",\($0.book),\"\($0.description)\"" }
-        // rows to string data
-        let stringData = heading + rows.joined(separator: "\n")
-        return stringData
+    func reshape(url: URL) throws -> [Record] {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        // Local URLs may be readable without a security scope. Propagate actual read errors.
+        return try parse(String(contentsOf: url, encoding: .utf8))
     }
-    
-    func generateCSV() -> URL {
-        var fileURL: URL!
-        let stringData = CSVDataGen()
-        do {
-            let path = try FileManager.default.url(for: .documentDirectory,
-                                                   in: .allDomainsMask,
-                                                   appropriateFor: nil,
-                                                   create: false)
-            //fileURL = path.appendingPathComponent("ECompoData.csv")
-            fileURL = path.appendingPathComponent(getFName())
-            // append string data to file
-            try stringData.write(to: fileURL, atomically: true , encoding: .utf8)
-            print(fileURL!)
-        } catch {
-            print("error : generating csv file")
+
+    /// Parse quoted fields, escaped quotes and embedded newlines without changing field text.
+    func parse(_ source: String) throws -> [Record] {
+        var text = source
+        if text.first == "\u{FEFF}" { text.removeFirst() }
+        let characters = Array(text.unicodeScalars)
+        var rows: [[String]] = []
+        var row: [String] = []
+        var field = ""
+        var quoted = false
+        var closedQuote = false
+        var index = 0
+        func endField() {
+            row.append(field)
+            field = ""
+            closedQuote = false
         }
-        return fileURL
-    }
-    /* Generate csv */
-    
-    func fileContents(file: URL) -> String{
-        // アクセス権取得
-        let gotAccess = file.startAccessingSecurityScopedResource()
-        if !gotAccess { return ""}
-        // ファイルの内容を取得する
-        //let filename = file.lastPathComponent
-        //let directoryURL = file.deletingLastPathComponent()
-        //let folder = URL(fileURLWithPath: directoryURL.path)
-        //let filen = folder.appendingPathComponent(filename)
-        //print("file://"+directoryURL.path+"/"+filename)
-        var text: String = ""
-        do {
-            text = try String(contentsOf: file, encoding: String.Encoding.utf8)
-        } catch {
-            print(error.localizedDescription)
+        func endRow() {
+            endField()
+            if row != [""] { rows.append(row) }
+            row = []
         }
-        // アクセス権解放
-        file.stopAccessingSecurityScopedResource()
-        return text
-    }
-    
-    func reshape(url: URL) -> [[String]]{
-        var outdata: [[String]] = [[]]
-        var csvdata: [String] = []
-        var str: String = ""
-        var flag: Bool = false
-        let textString: String = fileContents(file: url)
-        let lineChange = textString.replacingOccurrences(of: "\r", with: "\n")
-        var lineArray: [String] = lineChange.components(separatedBy: "\n")
-        if lineArray.last!.isEmpty{
-            lineArray.removeLast()
-        }
-        for line in lineArray {
-            var CR: Bool = false
-            if flag {
-                CR = true
-            }
-            let dataArray: [String] = line.components(separatedBy: ",")
-            if(dataArray[0]=="ID"){continue}
-            for data in dataArray{
-                var CM: Bool = false
-                if flag {
-                    CM = true
-                }
-                if data=="\"" {
-                    if flag {
-                        csvdata.append(str.replacingOccurrences(of:"\"", with:""))
-                        flag = false
-                        CM = false
-                        CR = false
-                    }else{
-                        flag=true
+        while index < characters.count {
+            let character = characters[index]
+            if quoted {
+                if character == "\"" {
+                    if index + 1 < characters.count, characters[index + 1] == "\"" {
+                        field.append("\"")
+                        index += 1
+                    } else {
+                        quoted = false
+                        closedQuote = true
                     }
-                } else if (!data.hasPrefix("\"")&&(!data.hasSuffix("\""))){
-                    if flag {
-                        var sep:String = ""
-                        if CM {
-                            sep = ", "
-                        }
-                        if CR {
-                            sep = "\n"
-                        }
-                        if str.isEmpty {
-                            if CM||CR {
-                                str = sep + data
-                            }else{
-                                str = data
-                            }
-                            
-                        }else{
-                            if CM||CR {
-                                str = str + sep + data
-                            }else{
-                                str += data
-                            }
-                        }
-                        if CM {CM=false}
-                        if CR {CR=false}
-                    }else{
-                        csvdata.append(data.replacingOccurrences(of:"\"", with:""))
-                        CM = false
-                        CR = false
+                } else { field.unicodeScalars.append(character) }
+            } else {
+                switch character {
+                case ",": endField()
+                case "\r", "\n":
+                    endRow()
+                    if character == "\r", index + 1 < characters.count,
+                       characters[index + 1] == "\n" { index += 1 }
+                case "\"":
+                    guard field.isEmpty, !closedQuote else {
+                        throw DataError.invalid("CSVの引用符が不正です（レコード \(rows.count + 1)）。")
                     }
-                }else if (data.hasPrefix("\"")&&(data.hasSuffix("\""))){
-                    csvdata.append(data.replacingOccurrences(of:"\"", with:""))
-                    CM = false
-                    CR = false
-                }else if (data.hasPrefix("\"")&&(!data.hasSuffix("\""))){
-                    str = data
-                    flag = true
-                }else if ((!data.hasPrefix("\""))&&(data.hasSuffix("\""))){
-                    if str.isEmpty {
-                        str = data
-                    }else{
-                        var sep:String = ""
-                        if CM {
-                            sep = ", "
-                        }
-                        if CR {
-                            sep = "\n"
-                        }
-                        if CR||CM {
-                            str = str + sep + data
-                        }else{
-                            str += data
-                        }
-                        if CM {CM=false}
-                        if CR {CR=false}
+                    quoted = true
+                default:
+                    guard !closedQuote else {
+                        throw DataError.invalid("CSVの引用符の後に区切り以外の文字があります。")
                     }
-                    csvdata.append(str.replacingOccurrences(of:"\"", with:""))
-                    flag = false
-                    CM = false
-                    CR = false
-                }
-                if 12==csvdata.count{
-                    if csvdata[0]==""{
-                        csvdata.removeFirst()
-                    }
-                    outdata.append(csvdata)
-                    csvdata.removeAll()
+                    field.unicodeScalars.append(character)
                 }
             }
+            index += 1
         }
-        return outdata
+        guard !quoted else { throw DataError.invalid("CSVの引用符が閉じられていません。") }
+        if !row.isEmpty || !field.isEmpty || closedQuote { endRow() }
+        if let first = rows.first, first.first == "ID" {
+            // Accept the trailing space in the legacy export's final heading.
+            guard first.map({ $0.trimmingCharacters(in: .whitespaces) }) == Self.header else {
+                throw DataError.invalid("CSVの見出しまたは列の順序が異なります。")
+            }
+            rows.removeFirst()
+        }
+        guard !rows.isEmpty else { throw DataError.invalid("CSVに取り込めるデータがありません。") }
+        return try rows.enumerated().map { offset, values in
+            do { return try Record(data: values) }
+            catch { throw DataError.invalid("CSVレコード \(offset + 1): \(error.localizedDescription)") }
+        }
     }
-    
-
 }

@@ -6,6 +6,7 @@
 //
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension String {
     var length: Int {
@@ -41,9 +42,16 @@ extension UIApplication {
 }
 
 struct ContentView: View {
-    let dao = DAO()
+    @State private var dao = DAO()
+    @State private var records: [Record] = []
+    @State private var initialized = false
+    @State private var editorSession: RecordEditorSession?
+    @State private var screenError: String?
+    @State private var swipeForward = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let csv = CSV(fname: "ECompoData")
-    let myjson = JSONRW(fname: "output")
+    let myjson = JSONRW()
     
     enum Field: Hashable {
         // https://dev.classmethod.jp/articles/focusstate-keyboard/
@@ -66,9 +74,9 @@ struct ContentView: View {
     @State private var eibun: String = ""
     @State private var hint: String = ""
     @State private var description: String = ""
-    @State private var isWabun: Bool = true
-    @State private var isEibun: Bool = true
-    @State private var isHint: Bool = true
+    @State private var isWabun: Bool = false
+    @State private var isEibun: Bool = false
+    @State private var isHint: Bool = false
     @State private var book: String = ""
     @State private var selectedBook: String = "準1級：完全制覇"
     @State private var selectedField: String = ""
@@ -84,6 +92,9 @@ struct ContentView: View {
     @State private var isDelete: Bool = false
     @State private var exportFile: Bool = false
     @State private var importFile: Bool = false
+    @State private var transferSession: DataTransferSession?
+    @State private var transferFormat: DataTransferFormat = .json
+    @State private var pendingTransfer: DataTransferDirection?
     @State private var isDisableBook: Bool = false
     @State private var isDisableField: Bool = false
     @State private var isDisableTopic: Bool = false
@@ -98,749 +109,460 @@ struct ContentView: View {
 
     @State private var text: String = ""
     @State private var stringData: String = ""
-    @State private var csvIOoption = ""
     @State private var csvData: [[String]] = []
-    private let searchObjs = ["全","本","分野","話題","題目","頁"]
     //@State private var Books = ["1級完全制覇", "1級文単", "準1級完全制覇", "準1級文単", "入試問題精講"]
     @State private var Books = [""]
     @State private var Titles = [""]
     @State private var Topics = [""]
     @State private var Fields = [""]
 
-    init(){
-        self.dao.initial()
-        dao.select_all()
-        current = 0
-        sizeofRecords = records.count
-        Books = dao.distinct(field_name: "book")
-        Fields = dao.distinct(field_name: "field")
-        Topics = dao.distinct(field_name: "topic")
-        Titles = dao.distinct(field_name: "title")
-        show_current(current: current)
+    /// Errors leave the draft intact; successful writes end editing before refreshing.
+    func report(_ error: Error) {
+        print("処理エラー: \(error.localizedDescription)")
+        screenError = error.localizedDescription
     }
-    
-    func clear_fields(){
-        line = "0"
-        page = "0"
-        chap = "0"
-        field = ""
-        topic = ""
-        title = ""
-        wabun = ""
-        eibun = ""
-        hint = ""
-        description = ""
+
+    func perform(_ operation: () throws -> Void) {
+        do { try operation() }
+        catch { report(error) }
     }
-    
-    func show_current(current:Int){
-        if records.count==0{return}
-        id = records[current].id
-        eibun = records[current].eibun
-        wabun = records[current].wabun
-        hint = records[current].hint
-        line = String(records[current].line)
-        page = String(records[current].page)
-        chap = String(records[current].chap)
-        title = records[current].title
-        topic = records[current].topic
-        field = records[current].field
-        selectedBook = records[current].book
-        selectedField = field
-        selectedTopic = topic
-        selectedTitle = title
-        description = records[current].description
-        sizeofRecords = records.count
-        Books = dao.distinct(field_name: "book")
-        Titles = dao.distinct_book(book_name: selectedBook, field_name: "title")
-        Topics = dao.distinct_book(book_name: selectedBook, field_name: "topic")
-        Fields = dao.distinct_book(book_name: selectedBook, field_name: "field")
+
+    func initialize() {
+        guard !initialized else { return }
+        perform {
+            try dao.initial()
+            try display(dao.select_all())
+            initialized = true
+        }
     }
-    func setData() -> [String]{
-        var data = [String]()
-        data.append(String(id))
-        data.append(eibun)
-        data.append(wabun)
-        data.append(hint)
-        data.append(String(line))
-        data.append(String(page))
-        data.append(String(chap))
-        data.append(title)
-        data.append(topic)
-        data.append(field)
-        data.append(book)
-        data.append(description)
-        return data
+
+    func clear_fields() {
+        id = 0
+        line = "0"; page = "0"; chap = "0"
+        field = ""; topic = ""; title = ""
+        wabun = ""; eibun = ""; hint = ""; description = ""
+        book = selectedBook
     }
-    func okActionUpdate(){
-        let curr = self.current
-        let data = setData()
-        dao.update(data: data, id:id)
-        search()
-        self.current = curr
-        show_current(current:self.current)
+
+    /// Gather everything first, so a failed query cannot leave a partially refreshed screen.
+    func display(_ result: [Record], preferredID: Int? = nil, index: Int = 0) throws {
+        let position = result.isEmpty ? 0 : min(max(index, 0), result.count - 1)
+        let selectedIndex = preferredID.flatMap { wanted in result.firstIndex { $0.id == wanted } } ?? position
+        let record = result.isEmpty ? nil : result[selectedIndex]
+        let books = try dao.distinct(field_name: "book")
+        let nextBook = record?.book ?? (books.contains(selectedBook) ? selectedBook : books.first ?? "")
+        let titles = try dao.distinct(field_name: "title", book: nextBook)
+        let topics = try dao.distinct(field_name: "topic", book: nextBook)
+        let fields = try dao.distinct(field_name: "field", book: nextBook)
+        records = result
+        current = selectedIndex
+        sizeofRecords = result.count
+        Books = books.isEmpty ? [""] : books
+        Titles = titles.isEmpty ? [""] : titles
+        Topics = topics.isEmpty ? [""] : topics
+        Fields = fields.isEmpty ? [""] : fields
+        selectedBook = nextBook
+        guard let record = record else {
+            clear_fields()
+            selectedField = fields.first ?? ""
+            selectedTopic = topics.first ?? ""
+            selectedTitle = titles.first ?? ""
+            return
+        }
+        id = record.id
+        eibun = record.eibun; wabun = record.wabun; hint = record.hint
+        line = String(record.line); page = String(record.page); chap = String(record.chap)
+        title = record.title; topic = record.topic; field = record.field
+        book = record.book; selectedBook = record.book
+        selectedField = field; selectedTopic = topic; selectedTitle = title
+        description = record.description
+    }
+
+    func show_current(current: Int) {
+        perform { try display(records, index: current) }
+    }
+
+    func swipeArticle(forward: Bool) {
+        let nextIndex = current + (forward ? 1 : -1)
+        guard records.indices.contains(nextIndex) else { return }
+        swipeForward = forward
+        withAnimation(.easeInOut(duration: reduceMotion ? 0.15 : 0.25)) {
+            // display validates and loads all data before updating the current article.
+            do { try display(records, index: nextIndex) }
+            catch { report(error) }
+        }
+    }
+
+    func setData() throws -> Record {
+        try Record(data: [String(id), eibun, wabun, hint, line, page, chap,
+                          title, topic, field, book, description])
+    }
+
+    func beginEditor(isNew: Bool) {
+        perform {
+            let record: Record
+            if isNew {
+                record = try Record(data: ["0", "", "", "", "0", "0", "0",
+                                           "", "", "", selectedBook, ""])
+            } else {
+                guard records.indices.contains(current) else {
+                    throw DataError.invalid("編集するデータがありません。")
+                }
+                record = records[current]
+            }
+            focusedField = nil
+            UIApplication.shared.closeKeyboard()
+            editorSession = RecordEditorSession(record: record, isNew: isNew)
+        }
+    }
+
+    func saveEditor(_ record: Record, isNew: Bool) throws {
+        let savedID: Int
+        if isNew {
+            savedID = try dao.insert(record)
+        } else {
+            try dao.update(record, id: record.id)
+            savedID = record.id
+        }
+        finishEditing()
+        // The write has completed. A refresh failure must not cause a second insert on retry.
+        do { try display(searchResults(), preferredID: savedID, index: current) }
+        catch {
+            screenError = "保存は完了しましたが、画面の再読込に失敗しました。本または分類を選び直してください。\n" + error.localizedDescription
+        }
+    }
+
+    func finishEditing() {
         edit_update = "Edit"
         new_save = "New"
         isUpdate = false
-        focusedField = nil
-    }
-    func okActionSave(){
-        let curr = self.current
-        let data = setData()
-        dao.insert(data: data)
-        search()
-        self.current = curr + 1
-        show_current(current:self.current)
-        new_save = "New"
-        edit_update = "Edit"
         isSave = false
-        focusedField = nil
-    }
-    func okActionDelete(){
-        let curr = self.current
-        self.dao.delete(id:id)
-        search()
-        self.current = curr - 1
-        show_current(current:self.current)
         isDelete = false
         focusedField = nil
     }
-    /*
-    func python01(cmdlnargs: [String]) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let path: String = "/Users/mat/Documents/PycharmProjects/qa4u"
-        var strArray:[String] = [path + "/qa4u3/go.sh"]
-        strArray.append(contentsOf: cmdlnargs)
-        process.arguments = strArray
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        var output: String = ""
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            output = String(data: data, encoding: .utf8) ?? ""
-            //print("Python script output: \(output)")
-        } catch {
-            print("Error: \(error.localizedDescription)")
-            output = error.localizedDescription
+
+    func okActionUpdate() {
+        perform {
+            let savedID = id
+            let previousIndex = current
+            try dao.update(setData(), id: savedID)
+            finishEditing()
+            try display(searchResults(), preferredID: savedID, index: previousIndex)
         }
-        return output
-    }
-    */
-    func pickRandomNumbers(from num:Int, count: Int = 10) -> [Int] {
-        let numbers = Array(0..<num)
-        //guard num >= count else {
-            //numbers = Array(0..)
-            //return []
-        //}
-        let shuffled = numbers.shuffled()
-        let selected = Array(shuffled.prefix(count))
-        return selected
-    }
-    func okActionPrintRandom(sort:String){
-        if sort=="field" {
-            self.dao.select_book_field(book: selectedBook, field: selectedField)
-        }else{
-            self.dao.select_book_topic(book: selectedBook, topic: selectedTopic)
-        }
-        let num_of_records=records.count
-        let randomNumbers = pickRandomNumbers(from: num_of_records)
-        myjson.initial()
-        for n in randomNumbers {
-            myjson.booksappend(
-                book:records[n].book,
-                field:records[n].field,
-                topic:records[n].topic,
-                title:records[n].title,
-                page:records[n].page,
-                line:records[n].line,
-                wabun:records[n].wabun,
-                eibun:records[n].eibun
-            )
-            print("Debug:",records[n].id, records[n].wabun)
-        }
-        myjson.jsongen(sort:sort)
-        printAlert1 = false
-        printAlert2 = false
-    }
-    
-    func okActionPrintAll(sort:String){
-        if sort=="field" {
-            self.dao.select_book_field(book: selectedBook, field: selectedField)
-        }else{
-            self.dao.select_book_topic(book: selectedBook, topic: selectedTopic)
-        }
-        let num_of_records=records.count
-        //let randomNumbers = pickRandomNumbers(from: num_of_records, count: num_of_records)
-        myjson.initial()
-        for n in 0 ..< num_of_records {
-            myjson.booksappend(
-                book:records[n].book,
-                field:records[n].field,
-                topic:records[n].topic,
-                title:records[n].title,
-                page:records[n].page,
-                line:records[n].line,
-                wabun:records[n].wabun,
-                eibun:records[n].eibun
-            )
-            print("Debug",records[n].id, records[n].wabun)
-        }
-        myjson.jsongen(sort:sort)
-        printAlert1 = false
-        printAlert2 = false
     }
 
-    func nothankyou(){
-        printAlert1 = false
-        printAlert2 = false
-    }
-
-    func search(){
-        if selectedSearch==searchObjs[0] {
-            self.dao.select_all()
-        }else if selectedSearch==searchObjs[1] {
-            self.dao.select_book(book: selectedBook)
-        }else if selectedSearch==searchObjs[2] {
-            self.dao.select_book_field(book: selectedBook, field: selectedField)
-        }else if selectedSearch==searchObjs[3] {
-            self.dao.select_book_topic(book: selectedBook, topic: selectedTopic)
-        }else if selectedSearch==searchObjs[4] {
-            self.dao.select_book_title(book: selectedBook, title: selectedTitle)
-        }else if selectedSearch==searchObjs[5] {
-            self.dao.select_book_page(book: book, page: Int(page)!)
+    func okActionSave() {
+        perform {
+            let previousIndex = current
+            let savedID = try dao.insert(setData())
+            finishEditing()
+            try display(searchResults(), preferredID: savedID, index: previousIndex)
         }
     }
-    private let options = ["CSV入力","CSV出力","分野(JSON出力)","話題(JSON出力)"]
-    @State private var printAlert1 = false
-    @State private var printAlert2 = false
-    @State private var showAlert = false
-    @State private var importedData: [[String]] = []
-    @State private var yesnoflag = false
 
-    func yesaction() {
-        yesnoflag = false
-        print("Yes selected")
-    }
-
-    func noaction() {
-        yesnoflag = true
-        print("No selected")
-    }
-
-    func processCSV() {
-        if !yesnoflag {
-            dao.close()
-            dao.initial()
-            dao.drop_table()
-            dao.create_table()
+    func okActionDelete() {
+        perform {
+            let previousIndex = current
+            try dao.delete(id: id)
+            finishEditing()
+            try display(searchResults(), index: previousIndex)
         }
-        for csvdata in importedData {
-            if csvdata.count > 1 {
-                dao.insert_fromcsv(data: csvdata)
+    }
+
+    func searchResults() throws -> [Record] {
+        switch selectedSearch {
+        case "全": return try dao.select_all()
+        case "本": return try dao.select_book(book: selectedBook)
+        case "分野": return try dao.select_book_field(book: selectedBook, field: selectedField)
+        case "話題": return try dao.select_book_topic(book: selectedBook, topic: selectedTopic)
+        case "題目": return try dao.select_book_title(book: selectedBook, title: selectedTitle)
+        case "頁":
+            return try dao.select_book_page(book: selectedBook, page: Record.number(page, name: "頁"))
+        default: throw DataError.invalid("検索条件が不正です。")
+        }
+    }
+
+    func search() {
+        perform {
+            try display(searchResults())
+            finishEditing()
+        }
+    }
+
+    /// Only picker writes trigger a search. Updating display state does not use this binding.
+    func searchSelection(_ selection: Binding<String>, scope: String? = nil) -> Binding<String> {
+        Binding(
+            get: { selection.wrappedValue },
+            set: { value in
+                let target = scope ?? value
+                guard selection.wrappedValue != value || selectedSearch != target else { return }
+                selection.wrappedValue = value
+                selectedSearch = target
+                search()
             }
+        )
+    }
+
+    enum MenuConfirmation {
+        case delete, importRecords
+    }
+    @State private var menuConfirmation: MenuConfirmation = .delete
+    @State private var showMenuConfirmation = false
+    @State private var importedData: [Record] = []
+
+    func processImport(replacing: Bool) {
+        perform {
+            try dao.importRecords(importedData, replacing: replacing)
+            importedData = []
+            finishEditing()
+            selectedSearch = "全"
+            try display(dao.select_all())
         }
-        dao.select_all()
-        current = 0
-        sizeofRecords = records.count
-        Books = dao.distinct(field_name: "book")
-        Fields = dao.distinct(field_name: "field")
-        Topics = dao.distinct(field_name: "topic")
-        Titles = dao.distinct(field_name: "title")
-        show_current(current: current)
     }
 
     @State var noEdit: Bool = false
 
+    func sentenceRow(_ label: String, text: String, revealed: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 4) {
+                Text(label)
+                Toggle(label, isOn: revealed)
+                    .labelsHidden()
+                    .scaleEffect(0.7)
+            }
+            .frame(width: 60)
+            Text(text.isEmpty ? " " : text)
+                .font(.system(size: 15))
+                .foregroundColor(.primary)
+                .opacity(revealed.wrappedValue ? 1 : 0)
+                .accessibilityHidden(!revealed.wrappedValue)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(8)
+                .background(Color(UIColor.systemGray6))
+                .border(Color.gray)
+        }
+    }
+
+    func requestConfirmation(_ action: MenuConfirmation) {
+        menuConfirmation = action
+        showMenuConfirmation = true
+    }
+
+    var confirmationTitle: String {
+        menuConfirmation == .delete ? "Delete?" : "インポート"
+    }
+
+    var confirmationMessage: String {
+        menuConfirmation == .delete
+            ? "id=\(id), sentence=\(eibun)"
+            : "\(importedData.count)件を取り込みます。既存データを置き換えますか、追記しますか？"
+    }
+
+    func beginTransfer(_ direction: DataTransferDirection) {
+        transferSession = DataTransferSession(direction: direction,
+            context: ExportContext(scope: selectedSearch, book: selectedBook,
+                                   field: selectedField, topic: selectedTopic,
+                                   title: selectedTitle, page: page))
+    }
+
+    func prepareTransfer(_ direction: DataTransferDirection, format: DataTransferFormat,
+                         scope: String, context: ExportContext) throws {
+        if direction == .export {
+            let output: [Record]
+            switch scope {
+            case "全": output = try dao.select_all()
+            case "本": output = try dao.select_book(book: context.book)
+            case "分野": output = try dao.select_book_field(book: context.book, field: context.field)
+            case "話題": output = try dao.select_book_topic(book: context.book, topic: context.topic)
+            case "題目": output = try dao.select_book_title(book: context.book, title: context.title)
+            case "頁": output = try dao.select_book_page(book: context.book,
+                page: Record.number(context.page, name: "頁"))
+            default: throw DataError.invalid("エクスポートの検索対象が不正です。")
+            }
+            // Export queries never replace the browsing records or change the current article.
+            if format == .json {
+                stringData = try myjson.generate(records: output)
+            } else {
+                stringData = csv.CSVDataGen(records: output)
+            }
+        }
+        transferFormat = format
+        pendingTransfer = direction
+    }
+
+    func presentPendingTransfer() {
+        guard let direction = pendingTransfer else { return }
+        pendingTransfer = nil
+        // Wait until the options dialog has closed before presenting a file picker.
+        if direction == .export { exportFile = true }
+        else { importFile = true }
+    }
+
+    var actionMenu: some View {
+        Menu {
+            Section {
+                Button("New", systemImage: "plus") { beginEditor(isNew: true) }
+                Button("Edit", systemImage: "square.and.pencil") { beginEditor(isNew: false) }
+                    .disabled(!records.indices.contains(current))
+                Button(role: .destructive) {
+                    requestConfirmation(.delete)
+                } label: {
+                    Label("Del", systemImage: "trash")
+                }
+                .disabled(!records.indices.contains(current))
+            }
+            Section {
+                Button("エクスポート", systemImage: "square.and.arrow.up") {
+                    beginTransfer(.export)
+                }
+                Button("インポート", systemImage: "square.and.arrow.down") {
+                    beginTransfer(.import)
+                }
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(Color.accentColor, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+        }
+        .accessibilityLabel("操作メニュー")
+        .fileImporter(isPresented: $importFile, allowedContentTypes: transferFormat == .json ? [.json] : [.commaSeparatedText, .plainText],
+                      allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let files):
+                guard let file = files.first else { return }
+                perform {
+                    if transferFormat == .json {
+                        importedData = try myjson.read(url: file)
+                    } else {
+                        importedData = try csv.reshape(url: file)
+                    }
+                    requestConfirmation(.importRecords)
+                }
+            case .failure(let error): report(error)
+            }
+        }
+        .fileExporter(isPresented: $exportFile,
+                      document: SmpFileDocument(text: stringData),
+                      contentTypes: [transferFormat.contentType], defaultFilename: "ECompoData." + transferFormat.rawValue.lowercased()) { result in
+            if case .failure(let error) = result { report(error) }
+        } onCancellation: {
+            // Cancellation does not change data.
+        }
+        .confirmationDialog(confirmationTitle, isPresented: $showMenuConfirmation,
+                            titleVisibility: .visible) {
+            switch menuConfirmation {
+            case .delete:
+                Button("Ok", role: .destructive) { okActionDelete() }
+            case .importRecords:
+                Button("置き換え", role: .destructive) { processImport(replacing: true) }
+                Button("追記") { processImport(replacing: false) }
+            }
+            Button("Cancel", role: .cancel) { importedData = [] }
+        } message: {
+            Text(confirmationMessage)
+        }
+    }
+
+    var browsingHeader: some View {
+        HStack(spacing: 8) {
+            Text("\(records.isEmpty ? 0 : current + 1)/\(records.count)")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .background(Color.accentColor.opacity(0.09), in: Capsule())
+                .fixedSize()
+                .accessibilityLabel("現在レコードと総件数")
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            Text("P.\(page)/L.\(line)")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .background(Color.accentColor.opacity(0.09), in: Capsule())
+                .fixedSize()
+                .accessibilityLabel("ページと行")
+            Menu {
+                Picker("本", selection: searchSelection($selectedBook, scope: "本")) {
+                    ForEach(Books, id: \.self) { Text($0) }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedBook.isEmpty ? "本を選択" : selectedBook)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel("本")
+            .accessibilityValue(selectedBook)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .trailing)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .background(Color(UIColor.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.04), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .padding(.bottom, 8)
+    }
+
     var body: some View {
         VStack(alignment: .center){
             VStack(alignment: .center){
-                HStack{
-                    Spacer()
-                    Button("|<<") {
-                        current = 0
-                        show_current(current:current)
-                    }.buttonStyle(.bordered)
-                    Spacer()
-                    Button("<") {
-                        if 0<current{
-                            current -= 1
+                browsingHeader
+                VStack {
+                    HStack {
+                        Text("分野")
+                        Picker("分野", selection: searchSelection($selectedField, scope: "分野")) {
+                            ForEach(Fields, id: \.self) { Text($0).font(.subheadline) }
                         }
-                        show_current(current:current)
-                    }.buttonStyle(.bordered)
-                    Spacer()
-                    Text(String(current+1)+"/"+String(sizeofRecords))
-                    Spacer()
-                    Button(">") {
-                        if current<records.count-1{
-                            current += 1
-                        }
-                        show_current(current:current)
-                    }.buttonStyle(.bordered)
-                    Spacer()
-                    Button(">>|") {
-                        current = records.count-1
-                        show_current(current:current)
-                    }.buttonStyle(.bordered)
-                    Spacer()
-                    Menu{
-                        // https://swappli.com/menu-picker/
-                        Picker("選択", selection: $csvIOoption){
-                            ForEach(options, id: \.self){ option in Text(option) }
-                        }.pickerStyle(.inline)
-                    } label: {
-                        //Text("CSV:")
-                        Image(systemName: "gearshape").symbolRenderingMode(.monochrome)
-                        //icon: do { Image(uiImage: ImageRenderer(content: Text("🏠")).uiImage!) }
-                    }
-                    if(csvIOoption=="CSV出力"){
-                        Button("出") {
-                            // ファイルをエクスポートするロジックを実装する
-                            stringData = csv.CSVDataGen()
-                            exportFile = true
-                            importFile = false
-                        }
-                        .fileExporter(
-                            isPresented: $exportFile,
-                            document: SmpFileDocument(text: stringData),
-                            contentTypes: [.plainText],
-                            defaultFilename: csv.getFName()
-                        ) { result in
-                            // エクスポートの完了時に実行されるコードを定義する
-                            switch result {
-                            case .success(let file):
-                                print(file.absoluteString)
-                            case .failure(let error):
-                                print(error)
-                            }
-                        }
-                        onCancellation: {
-                            print("cancel success")
-                        }
-                    }else if(csvIOoption=="CSV入力"){
-                        Button("入") {
-                            // ファイルをインポートするロジックを実装する
-                            importFile = true
-                            exportFile = false
-                        }.buttonBorderShape(.capsule)
-                            .fileImporter(
-                                isPresented: $importFile,
-                                allowedContentTypes: [.plainText],
-                                allowsMultipleSelection: false
-                            ) { result in
-                                switch result {
-                                case .success(let files):
-                                    guard let file = files.first else { return }
-                                    // 仮の reshape 読み込み処理
-                                    let data: [[String]] = csv.reshape(url: file)
-                                    self.importedData = data
-                                    self.showAlert = true  // -> アラート表示トリガー
-                                case .failure(let error):
-                                    print("Import error: \(error.localizedDescription)")
-                                }
-                            }
-                            .alert("New or Append", isPresented: $showAlert) {
-                                Button("Yes") {
-                                    yesaction()
-                                    processCSV()
-                                }
-                                Button("No", role: .cancel) {
-                                    noaction()
-                                    processCSV()
-                                }
-                            } message: {
-                                Text("DBを作り直しますか？")
-                            }
-                    }else if(csvIOoption=="分野(JSON出力)"){
-                        Button("分"){printAlert1=true}
-                            .alert("Random or Ascending ?", isPresented: $printAlert1) {
-                            Button("Random(10)") {
-                                okActionPrintRandom(sort:"field")
-                            }
-                            Button("Ascending(All)") {
-                                okActionPrintAll(sort:"field")
-                            }
-                            Button("Cancel", role: .cancel) {
-                                nothankyou()
-                            }
-                        } message: {
-                            Text("分野「"+selectedField+"」\nについて出題します")
-                        }
-                    }else if(csvIOoption=="話題(JSON出力)"){
-                        Button("話"){printAlert2=true}
-                            .alert("Random or Ascending ?", isPresented: $printAlert2) {
-                            Button("Random(10)") {
-                                okActionPrintRandom(sort:"topic")
-                            }
-                            Button("Ascending(All)") {
-                                okActionPrintAll(sort:"topic")
-                            }
-                            Button("Cancel", role: .cancel) {
-                                nothankyou()
-                            }
-                        } message: {
-                            Text("話題「"+selectedTopic+"」\nについて出題します")
-                        }
-                    }
-
-                    Spacer()
-                }//.padding()
-                HStack{
-                    Button("検索") {
-                        let book:String = selectedBook
-                        self.search()
-                        self.current = 0
-                        if records.count>0{
-                            self.sizeofRecords = records.count
-                            self.show_current(current:current)
-                        }else if records.count==0{
-                            records.removeAll()
-                            self.sizeofRecords = 0
-                            self.clear_fields()
-                        }
-                        self.selectedBook = book
-                        self.new_save = "New"
-                        self.edit_update = "Edit"
-                        self.focusedField = nil
-                    }.buttonStyle(.bordered)
-                    //Spacer()
-                    Picker(selection:$selectedSearch, label: Text("検索")) {
-                        ForEach (searchObjs, id: \.self) {
-                            Text($0)
-                        }
-                    }.pickerStyle(.menu)
-                        .frame(width:55)
+                        .pickerStyle(.wheel)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
                         .clipped()
                         .contentShape(Rectangle())
-                    Button( new_save ) {
-                        if new_save=="New" {
-                            clear_fields()
-                            new_save = "Save"
-                        } else if new_save=="Save" {
-                            isSave = true
-                        }
-                    }.buttonStyle(.bordered)
-                        .alert(isPresented: $isSave){
-                            Alert(title:Text("Save?"), message: Text("id=new"+", sentence="+eibun),
-                                  primaryButton:.default(Text("Ok"),action:{okActionSave()}),
-                                  secondaryButton:.cancel(Text("Cancel"), action:{}))
-                        }
-                    //Spacer()
-                    Button(edit_update) {
-                        if edit_update=="Edit"{
-                            edit_update = "Updt"
-                            new_save = "Save"
-                            book=selectedBook
-                            field=selectedField
-                            topic=selectedTopic
-                            title=selectedTitle
-                        } else if edit_update=="Updt"{
-                            isUpdate = true
-                        }
-                    }.buttonStyle(.bordered)
-                        .alert(isPresented: $isUpdate){
-                            Alert(title:Text("Update?"), message: Text("id="+String(id)+", sentence="+eibun),
-                                  primaryButton:.default(Text("Ok"),action:{okActionUpdate()}),
-                                  secondaryButton:.cancel(Text("Cancel"), action:{}))
-                        }
-                    //Spacer()
-                    Button("Del") {
-                        isDelete = true
-                    }.buttonStyle(.bordered)
-                        .alert(isPresented: $isDelete){
-                            Alert(title:Text("Delete?"), message: Text("id="+String(id)+",sentence="+eibun),
-                                  primaryButton:.default(Text("Ok"),action:{okActionDelete()}),
-                                  secondaryButton:.cancel(Text("Cancel"), action:{}))
-                        }
-                }//.padding()
-                //.onTapGesture {
-                //    focusedField = nil
-                //}
-                HStack{
-                    Text("行")
-                    ZStack{
-                        TextField("999", text: $line)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .frame(width: 46)
-                            .border(Color.gray)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .focused($focusedField, equals: .line)
-                            .foregroundColor(.primary)
-                            .background(Color(UIColor.systemGray6))
-                    }//.frame(width: UIScreen.main.bounds.width,height: UIScreen.main.bounds.height)
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-                    .onTapGesture {
-                        focusedField = nil
                     }
-                    Text("頁")
-                    ZStack{
-                    TextField("999", text: $page)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .frame(width: 46)
-                        .border(Color.gray)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focusedField, equals: .page)
-                        .foregroundColor(.primary)
-                        .background(Color(UIColor.systemGray6))
-                    }//.frame(width: UIScreen.main.bounds.width,height: UIScreen.main.bounds.height)
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-                    .onTapGesture {
-                        focusedField = nil
+                    HStack {
+                        Text("話題")
+                        Picker("話題", selection: searchSelection($selectedTopic, scope: "話題")) {
+                            ForEach(Topics, id: \.self) { Text($0).font(.subheadline) }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .clipped()
+                        .contentShape(Rectangle())
                     }
-                    /*
-                    Text("章")
-                    TextField("999", text: $chap)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .frame(width: 46)
-                        .border(Color.gray)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                    */
-                    if (new_save=="Save")||(edit_update=="Updt"){
-                        //book = selectedBook
-                        //
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            Button("本") {
-                                altBook.toggle()
-                            }.buttonStyle(.bordered)
-                        }else{
-                            Text("本")
+                    HStack {
+                        Text("題目")
+                        Picker("題目", selection: searchSelection($selectedTitle, scope: "題目")) {
+                            ForEach(Titles, id: \.self) { Text($0).font(.subheadline) }
                         }
-                        TextField("本", text: $book, axis: .vertical)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .border(Color.gray)
-                            .autocapitalization(.none)
-                            //.keyboardType(.default)
-                            .disableAutocorrection(true)
-                            .font(.system(size: 15))
-                            //.onSubmit {
-                            //    altBook.toggle()
-                            //}
-                            //.focused($focusState, equals: .bookf)
-                            .sheet(isPresented: $altBook) {
-                                @State var s:String = "本"
-                                EditView(ttl: $s, str: $book)
-                            }
-                    }else{
-                        Picker(selection:$selectedBook, label: Text("本")) {
-                            ForEach (Books, id: \.self) {
-                                Text($0)
-                            }
-                        }.pickerStyle(.menu)
-                            .frame(width: 160) //.frame(width: .infinity)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            //.onChange(of: selectedBook) { newValue in
-                            //    if newValue.isEmpty {
-                            .onChange(of: selectedBook) {
-                                if selectedBook.isEmpty {
-                                    isDisableBook = true
-                                } else {
-                                    if selectedSearch != searchObjs[0] {
-                                        //selectedSearch = "本"
-                                        self.dao.select_book(book: selectedBook)
-                                        if records.count>0{
-                                            current=0
-                                            show_current(current:current)
-                                        }else if records.count==0{
-                                            records.removeAll()
-                                            current = 0
-                                            sizeofRecords = 0
-                                            clear_fields()
-                                        }
-                                        isDisableBook = false
-                                    }
-                                }
-                            }
+                        .pickerStyle(.wheel)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .clipped()
+                        .contentShape(Rectangle())
                     }
-                }.padding()
-                VStack{
-                    HStack{
-                        //
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            Button("分野") {
-                                altField.toggle()
-                            }.buttonStyle(.bordered)
-                        }else{
-                            Text("分野")
-                        }
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            //field = selectedField
-                            TextField("分野", text: $field, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                //.keyboardType(.default)
-                                .disableAutocorrection(true)
-                                .font(.system(size: 15))
-                                //.onSubmit {
-                                //    altField.toggle()
-                                //}
-                                //.focused($focusState, equals: .fieldf)
-                                .sheet(isPresented: $altField) {
-                                    @State var s:String = "分野"
-                                    EditView(ttl: $s, str: $field)
-                                }
-                        }else{
-                            Picker(selection:$selectedField, label: Text(selectedField)) {
-                                ForEach (Fields, id: \.self) {
-                                    Text($0).font(.subheadline)
-                                }
-                            }
-                            .pickerStyle(.wheel)
-                            .frame(width: .infinity, height: 38)
-                            .clipped()
-                            .contentShape(Rectangle())
-/*
-                            .onChange(of: selectedField) { newValue in
-                                if newValue.isEmpty {
-                                    isDisableField = true
-                                } else {
-                                    //selectedSearch = "分野"
-                                    self.dao.select_book_field(book: selectedBook, field: selectedField)
-                                    if records.count>0{
-                                        current=0
-                                        show_current(current:current)
-                                    }else if records.count==0{
-                                        records.removeAll()
-                                        current = 0
-                                        sizeofRecords = 0
-                                        clear_fields()
-                                    }
-                                    isDisableField = false
-                                }
-                            }
-*/
-                        }
-                    }//.padding()
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                    HStack{
-                        //
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            Button("話題") {
-                                altTopic.toggle()
-                            }.buttonStyle(.bordered)
-                        }else{
-                            Text("話題")
-                        }
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            //topic = selectedTopic
-                            TextField("話題", text: $topic, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                //.keyboardType(.default)
-                                .disableAutocorrection(true)
-                                .font(.system(size: 15))
-                                //.onSubmit {
-                                //    altTopic.toggle()
-                                //}
-                                //.focused($focusState, equals: .topicf)
-                                .sheet(isPresented: $altTopic) {
-                                    @State var s:String = "話題"
-                                    EditView(ttl: $s, str: $topic)
-                                }
-
-                        }else{
-                            Picker(selection:$selectedTopic, label: Text("話題")) {
-                                ForEach (Topics, id: \.self) {
-                                    Text($0).font(.subheadline)
-                                }
-                            }.pickerStyle(.wheel)
-                                .frame(width: .infinity, height: 38)
-                                .clipped()
-                                .contentShape(Rectangle())
-/*
-                                .onChange(of: selectedTopic) { newValue in
-                                    if newValue.isEmpty {
-                                        isDisableTopic = true
-                                    } else {
-                                        //selectedSearch = "話題"
-                                        self.dao.select_book_topic(book: selectedBook, topic: selectedTopic)
-                                        if records.count>0{
-                                            current=0
-                                            show_current(current:current)
-                                        }else if records.count==0{
-                                            records.removeAll()
-                                            current = 0
-                                            sizeofRecords = 0
-                                            clear_fields()
-                                        }
-                                        isDisableTopic = false
-                                    }
-                                }
-*/
-                        }
-                    }//.padding()
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                    HStack{
-                        //
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            Button("題目") {
-                                altTitle.toggle()
-                            }.buttonStyle(.bordered)
-                        }else{
-                            Text("題目")
-                        }
-                        if (new_save=="Save")||(edit_update=="Updt"){
-                            TextField("題目", text: $title, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                //.keyboardType(.default)
-                                .disableAutocorrection(true)
-                                .font(.system(size: 15))
-                                //.onSubmit {
-                                //    altTitle.toggle()
-                                //}
-                                //.focused($focusState, equals: .titlef)
-                                .sheet(isPresented: $altTitle) {
-                                    @State var s:String = "題目"
-                                    EditView(ttl: $s, str: $title)
-                                }
-
-                        }else{
-                            Picker(selection:$selectedTitle, label: Text("題目")) {
-                                ForEach (Titles, id: \.self) {
-                                    Text($0).font(.subheadline)
-                                }
-                            }.pickerStyle(.wheel)
-                                .frame(width: .infinity, height: 38)
-                                .clipped()
-                                .contentShape(Rectangle())
-/*
-                                .onChange(of: selectedTitle) { newValue in
-                                    if newValue.isEmpty {
-                                        isDisableTitle = true
-                                    } else {
-                                        //selectedSearch = "題目"
-                                        self.dao.select_book_title(book: selectedBook, title: selectedTitle)
-                                        if records.count>0{
-                                            current=0
-                                            show_current(current:current)
-                                        }else if records.count==0{
-                                            records.removeAll()
-                                            current = 0
-                                            sizeofRecords = 0
-                                            clear_fields()
-                                        }
-                                        isDisableTitle = false
-                                    }
-                                }
-*/
-                        }
-                    }//.padding()
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                }//.padding()
+                }
                 //Spacer()
             }//.padding()
             .onTapGesture { UIApplication.shared.closeKeyboard() }
@@ -849,215 +571,65 @@ struct ContentView: View {
             //}
             //Spacer()
             Divider()
-            Spacer()
-            ZStack{
-                VStack() {
-                    //Spacer()
-                    HStack{
-                        VStack(spacing: 0){
-                            if (new_save=="Save")||(edit_update=="Updt"){
-                                Button("和文") {
-                                    altWabun.toggle()
-                                }.buttonStyle(.bordered)
-                            }else{
-                                Text("和文")
-                            }
-                            Toggle(isOn: $isWabun) {
-                                let _ = isWabun = false
-                            }.fixedSize()
-                                .scaleEffect(0.5)
-                        }//.padding()
-                        if isWabun {
-                            TextField("和文", text: $wabun, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                .keyboardType(.default)
-                                .disableAutocorrection(true)
-                                //.focused($focusedField, equals: .wabunf)
-                                .foregroundColor(.primary)
-                                .background(Color(UIColor.systemGray6))
-                                .font(.system(size: 15))
-                                .disabled(noEdit)
-                                //.onSubmit {
-                                //    altWabun.toggle()
-                                //}
-                                //.focused($focusState, equals: .wbunf)
-                                //.focused($focusedField, equals: .wbunf)
-                                .sheet(isPresented: $altWabun) {
-                                    @State var s:String = "和文"
-                                    EditView(ttl: $s, str: $wabun)
-                                }
-
-                        } else {
-                            TextField("和文", text: $wabun, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                .keyboardType(.default)
-                                .disableAutocorrection(true)
-                                //.focused($focusedField, equals: .wabun)
-                                .foregroundColor(Color(UIColor.systemGray6))
-                                .background(Color(UIColor.systemGray6))
-                                .font(.system(size: 15))
-                                .disabled(noEdit)
-                        }
-                    }//.frame(width: UIScreen.main.bounds.width,height: UIScreen.main.bounds.height)
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                    HStack{
-                        VStack(spacing: 0){
-                            if (new_save=="Save")||(edit_update=="Updt"){
-                                Button("英文") {
-                                    altEibun.toggle()
-                                }.buttonStyle(.bordered)
-                            }else{
-                                Text("英文")
-                            }
-                            Toggle(isOn: $isEibun) {
-                                let _ = isEibun = false
-                            }.fixedSize()
-                                .scaleEffect(0.5)
-                        }//.padding()
-                        if isEibun {
-                            TextField("英文", text: $eibun, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                //.keyboardType(.default)
-                                .disableAutocorrection(true)
-                                //.focused($focusedField, equals: .eibunf)
-                                .foregroundColor(.primary)
-                                .background(Color(UIColor.systemGray6))
-                                .font(.system(size: 15))
-                                .disabled(noEdit)
-                                //.onSubmit {
-                                //    altEibun.toggle()
-                                //}
-                                //.focused($focusState, equals: .ebunf)
-                                //.focused($focusedField, equals: .ebunf)
-                                .sheet(isPresented: $altEibun) {
-                                    @State var s:String = "英文"
-                                    EditView(ttl: $s, str: $eibun)
-                                }
-                        } else {
-                            TextField("英文", text: $eibun, axis: .vertical)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .border(Color.gray)
-                                .autocapitalization(.none)
-                                .keyboardType(.default)
-                                .disableAutocorrection(true)
-                                //.focused($focusedField, equals: .eibun)
-                                .foregroundColor(Color(UIColor.systemGray6))
-                                .background(Color(UIColor.systemGray6))
-                                .font(.system(size: 15))
-                                .disabled(noEdit)
-                        }
-                    }//.frame(width: UIScreen.main.bounds.width,height: UIScreen.main.bounds.height)
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                    HStack{
-                        VStack(spacing: 0){
-                            if (new_save=="Save")||(edit_update=="Updt"){
-                                Button("備考") {
-                                    altHint.toggle()
-                                }.buttonStyle(.bordered)
-                            }else{
-                                Text("備考")
-                            }
-                            Toggle(isOn: $isHint) {
-                                let _ = isHint = false
-                            }.fixedSize()
-                                .scaleEffect(0.5)
-                        }//.padding()
-                        if isHint {
-                            //NavigationLink(destination: EditView(text: hint)) {
-                                TextField("備考", text: $hint, axis: .vertical)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .border(Color.gray)
-                                    .autocapitalization(.none)
-                                    //.keyboardType(.default)
-                                    .disableAutocorrection(true)
-                                    //.focused($focusedField, equals: .hintf)
-                                    .foregroundColor(.primary)
-                                    .background(Color(UIColor.systemGray6))
-                                    .font(.system(size: 15))
-                                    .disabled(noEdit)
-                                    //.onSubmit {
-                                    //    altHint.toggle()
-                                    //}
-                                    //.focused($focusState, equals: .hintf)
-                                    //.focused($focusedField, equals: .hintf)
-                                    .sheet(isPresented: $altHint) {
-                                        @State var s:String = "備考"
-                                        EditView(ttl: $s, str: $hint)
-                                    }
-
-                            //}
-                        } else {
-                             TextField("備考", text: $hint, axis: .vertical)
-                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                 .border(Color.gray)
-                                 .autocapitalization(.none)
-                                 .keyboardType(.default)
-                                 .disableAutocorrection(true)
-                                 //.focused($focusedField, equals: .hint)
-                                 .foregroundColor(Color(UIColor.systemGray6))
-                                 .background(Color(UIColor.systemGray6))
-                                 .font(.system(size: 15))
-                                 .disabled(noEdit)
-                        }
-                    }//.frame(width: UIScreen.main.bounds.width,height: UIScreen.main.bounds.height)
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-                    //.onTapGesture {
-                    //    focusedField = nil
-                    //}
-                }//.padding()
-            }
-            //.ignoresSafeArea(.keyboard, edges: .bottom)
-            .onTapGesture { UIApplication.shared.closeKeyboard() }
-            .gesture(
-                DragGesture()
-                    .onEnded { gesture in
-                        let horizontalTranslation = gesture.translation.width
-                        let verticalTranslation = gesture.translation.height
-                        
-                        if abs(horizontalTranslation) > abs(verticalTranslation) {
-                            // 水平方向のスワイプ
-                            if horizontalTranslation > 0 {
-                                // 右にスワイプした場合の処理
-                                //self.labelText = "右にスワイプしました"
-                                if 0<current{
-                                    current -= 1
-                                }
-                                show_current(current:current)
-                            } else {
-                                // 左にスワイプした場合の処理
-                                //self.labelText = "左にスワイプしました"
-                                if current<records.count-1{
-                                    current += 1
-                                }
-                                show_current(current:current)
-                            }
-                        } else {
-                            // 垂直方向のスワイプ
-                            if verticalTranslation > 0 {
-                                // 下にスワイプした場合の処理
-                                //self.labelText = "下にスワイプしました"
-                            } else {
-                                // 上にスワイプした場合の処理
-                                //self.labelText = "上にスワイプしました"
-                            }
-                        }
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        sentenceRow("和文", text: wabun, revealed: $isWabun)
+                        sentenceRow("英文", text: eibun, revealed: $isEibun)
+                        sentenceRow("備考", text: hint, revealed: $isHint)
                     }
-            )//.withAnimation(.spring())
+                    .padding(.vertical, 8)
+                    .padding(.bottom, 72)
+                }
+                // A new identity makes article changes animate and resets vertical scrolling.
+                .id(id)
+                .transition(reduceMotion ? .opacity : .push(from: swipeForward ? .trailing : .leading))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { gesture in
+                        let horizontal = gesture.translation.width
+                        let vertical = gesture.translation.height
+                        // Keep vertical scrolling and small diagonal gestures from changing articles.
+                        guard abs(horizontal) >= 40,
+                              abs(horizontal) > abs(vertical) * 1.3 else { return }
+                        swipeArticle(forward: horizontal < 0)
+                    }
+            )
             //Divider()
             //Spacer()
         }.padding()
+            .overlay(alignment: .bottomTrailing) {
+                actionMenu
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 16)
+            }
+            .onAppear { initialize() }
+            .sheet(item: $transferSession, onDismiss: presentPendingTransfer) { session in
+                DataTransferOptionsView(direction: session.direction, context: session.context) { format, scope in
+                    try prepareTransfer(session.direction, format: format,
+                                        scope: scope, context: session.context)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+            .fullScreenCover(item: $editorSession) { session in
+                RecordEditorView(record: session.record, isNew: session.isNew) { record in
+                    try saveEditor(record, isNew: session.isNew)
+                }
+            }
+            .alert("処理エラー", isPresented: Binding(
+                get: { screenError != nil },
+                set: { if !$0 { screenError = nil } }
+            )) {
+                Button("OK", role: .cancel) { screenError = nil }
+            } message: {
+                Text(screenError ?? "")
+            }
+
     }
 }
 
@@ -1082,6 +654,229 @@ struct EditView :View {
             Button("閉じる"){dismiss()}
         }.padding()
             .navigationBarTitle(ttl)
+    }
+}
+
+/// A copy of the record keeps cancelled edits separate from the browsing screen.
+struct RecordEditorSession: Identifiable {
+    let id = UUID()
+    let record: Record
+    let isNew: Bool
+}
+
+struct RecordEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: Record
+    @State private var line: String
+    @State private var page: String
+    @State private var chap: String
+    @State private var saveError: String?
+    @State private var saving = false
+    let isNew: Bool
+    let onSave: (Record) throws -> Void
+
+    init(record: Record, isNew: Bool, onSave: @escaping (Record) throws -> Void) {
+        _draft = State(initialValue: record)
+        _line = State(initialValue: String(record.line))
+        _page = State(initialValue: String(record.page))
+        _chap = State(initialValue: String(record.chap))
+        self.isNew = isNew
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("掲載位置") {
+                    LabeledContent("本") { TextField("本", text: $draft.book) }
+                    LabeledContent("行") { TextField("0", text: $line).keyboardType(.numberPad) }
+                    LabeledContent("頁") { TextField("0", text: $page).keyboardType(.numberPad) }
+                    LabeledContent("章") { TextField("0", text: $chap).keyboardType(.numberPad) }
+                }
+                Section("分類") {
+                    LabeledContent("分野") { TextField("分野", text: $draft.field) }
+                    LabeledContent("話題") { TextField("話題", text: $draft.topic) }
+                    LabeledContent("題目") { TextField("題目", text: $draft.title) }
+                }
+                Section("和文") {
+                    TextEditor(text: $draft.wabun).frame(minHeight: 160)
+                }
+                Section("英文") {
+                    TextEditor(text: $draft.eibun).frame(minHeight: 160)
+                }
+                Section("備考（ヒント）") {
+                    TextEditor(text: $draft.hint).frame(minHeight: 120)
+                }
+                Section("その他の備考") {
+                    TextEditor(text: $draft.description).frame(minHeight: 120)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(isNew ? "新規登録" : "編集")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }.disabled(saving)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("キーボードを閉じる") { UIApplication.shared.closeKeyboard() }
+                }
+            }
+            .alert("保存できません", isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )) {
+                Button("OK", role: .cancel) { saveError = nil }
+            } message: {
+                Text(saveError ?? "")
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+
+    private func save() {
+        guard !saving else { return }
+        saving = true
+        do {
+            // Revalidate every field through the same path as CSV imports.
+            var fields = draft.csvFields
+            fields[4] = line; fields[5] = page; fields[6] = chap
+            let validated = try Record(data: fields)
+            try onSave(validated)
+            dismiss()
+        } catch {
+            saving = false
+            saveError = error.localizedDescription
+        }
+    }
+}
+
+enum DataTransferFormat: String, CaseIterable, Identifiable {
+    case json = "JSON"
+    case csv = "CSV"
+    var id: String { rawValue }
+    var contentType: UTType { self == .json ? .json : .commaSeparatedText }
+}
+
+enum DataTransferDirection {
+    case `export`, `import`
+    var title: String { self == .export ? "エクスポート" : "インポート" }
+}
+
+struct ExportContext {
+    let scope: String
+    let book: String
+    let field: String
+    let topic: String
+    let title: String
+    let page: String
+}
+
+struct DataTransferSession: Identifiable {
+    let id = UUID()
+    let direction: DataTransferDirection
+    let context: ExportContext
+}
+
+struct DataTransferOptionsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var format: DataTransferFormat = .json
+    @State private var scope: String
+    @State private var errorMessage: String?
+    @State private var submitted = false
+    let direction: DataTransferDirection
+    let context: ExportContext
+    let onSubmit: (DataTransferFormat, String) throws -> Void
+    private let scopes = ["全", "本", "分野", "話題", "題目", "頁"]
+
+    init(direction: DataTransferDirection, context: ExportContext,
+         onSubmit: @escaping (DataTransferFormat, String) throws -> Void) {
+        self.direction = direction
+        self.context = context
+        self.onSubmit = onSubmit
+        _scope = State(initialValue: context.scope)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("ファイル形式") {
+                    HStack(spacing: 16) {
+                        ForEach(DataTransferFormat.allCases) { choice in
+                            Button {
+                                format = choice
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: format == choice ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(Color.accentColor)
+                                    Text(choice.rawValue).foregroundStyle(.primary)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(choice.rawValue)
+                            .accessibilityValue(format == choice ? "選択中" : "未選択")
+                        }
+                    }
+                }
+                if direction == .export {
+                    Section {
+                        Picker("検索対象", selection: $scope) {
+                            ForEach(scopes, id: \.self) { Text($0) }
+                        }
+                        .pickerStyle(.menu)
+                        if scope != "全" { LabeledContent("本", value: context.book) }
+                        if scope == "分野" { LabeledContent("分野", value: context.field) }
+                        if scope == "話題" { LabeledContent("話題", value: context.topic) }
+                        if scope == "題目" { LabeledContent("題目", value: context.title) }
+                        if scope == "頁" { LabeledContent("頁", value: context.page) }
+                    } header: {
+                        Text("検索対象")
+                    } footer: {
+                        Text("選択中の本・分類・頁を条件に出力します。「全」はすべての本が対象です。")
+                    }
+                } else {
+                    Section {
+                        Text("次の画面でファイルを選択します。読み込み後に、既存データへの追記または置き換えを選べます。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle(direction.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("次へ") { submit() }.disabled(submitted)
+                }
+            }
+            .alert("処理できません", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    private func submit() {
+        guard !submitted else { return }
+        do {
+            try onSubmit(format, scope)
+            submitted = true
+            dismiss()
+        } catch { errorMessage = error.localizedDescription }
     }
 }
 
