@@ -10,6 +10,13 @@ enum ImportFormat: String, CaseIterable, Identifiable {
     }
 }
 
+private struct ReadingState: Codable {
+    let selectedBook: String?
+    let selectedStage: String?
+    let selectedPage: Int?
+    let wordID: Int?
+}
+
 /// Published state and WCSession operations are handled on the main queue.
 /// File parsing and all SQLite access use one serial worker queue.
 final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
@@ -33,6 +40,7 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
     @Published private(set) var selectedPage: Int?
 
     private let dao = DAO()
+    private let readingStateKey = "WatchEWord.readingState.v1"
     private let worker = DispatchQueue(label: "jp.matoike.HelloEWatch.database", qos: .userInitiated)
     private var revision = UUID().uuidString
     private let timestampKey = "WatchEWord.lastSnapshotTimestamp.v1"
@@ -71,8 +79,7 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
                     self.records = records
                     self.loaded = true
                     self.busy = false
-                    self.refreshChoices()
-                    self.search()
+                    self.restoreReadingState()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -129,16 +136,42 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
         search()
     }
 
-    func search() {
+    func search(restoringWordID: Int? = nil) {
         guard !busy, loaded else { return }
         matches = records.filter { record in
             (selectedBook == nil || record.book == selectedBook)
                 && (selectedStage == nil || record.stage == selectedStage)
                 && (selectedPage == nil || record.page == selectedPage)
         }
-        current = 0
+        // Database IDs remain stable even when appended words change the sort order.
+        current = restoringWordID.flatMap { id in matches.firstIndex { $0.id == id } } ?? 0
         revision = UUID().uuidString
         publishSnapshot()
+    }
+
+    private func saveReadingState() {
+        guard loaded, !busy else { return }
+        let wordID = matches.indices.contains(current) ? matches[current].id : nil
+        let state = ReadingState(selectedBook: selectedBook, selectedStage: selectedStage,
+                                 selectedPage: selectedPage, wordID: wordID)
+        do {
+            let data = try JSONEncoder().encode(state)
+            UserDefaults.standard.set(data, forKey: readingStateKey)
+        } catch {
+            errorMessage = "選択状態を保存できませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    private func restoreReadingState() {
+        guard loaded, !busy else { return }
+        let state = UserDefaults.standard.data(forKey: readingStateKey)
+            .flatMap { try? JSONDecoder().decode(ReadingState.self, from: $0) }
+        selectedBook = state?.selectedBook
+        selectedStage = state?.selectedStage
+        selectedPage = state?.selectedPage
+        // Validate saved selections against the freshly loaded database before searching.
+        refreshChoices()
+        search(restoringWordID: state?.wordID)
     }
 
     func readImport(_ url: URL, format: ImportFormat) {
@@ -222,7 +255,10 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     private func publishSnapshot() {
-        guard loaded, let data = makeSnapshot() else { return }
+        guard loaded else { return }
+        // Save before checking connectivity; also covers navigation received from Watch.
+        saveReadingState()
+        guard let data = makeSnapshot() else { return }
         // A newer search/navigation invalidates an older send's status callback.
         pushID = nil
         latestSnapshot = data
@@ -238,7 +274,6 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
 
     func sendToWatch() {
         guard !busy, loaded else { return }
-        current = 0
         revision = UUID().uuidString
         publishSnapshot()
         guard let session = wcSession, session.activationState == .activated,
