@@ -301,12 +301,14 @@ struct ContentView: View {
         }
     }
 
-    func okActionDelete() {
-        perform {
-            let previousIndex = current
-            try dao.delete(id: id)
-            finishEditing()
-            try display(searchResults(), index: previousIndex)
+    func deleteEditor(id: Int) throws {
+        let previousIndex = current
+        try dao.delete(id: id)
+        finishEditing()
+        // Deletion has completed; a refresh failure must not trigger another deletion.
+        do { try display(searchResults(), index: previousIndex) }
+        catch {
+            screenError = "削除は完了しましたが、画面の再読込に失敗しました。本または分類を選び直してください。\n" + error.localizedDescription
         }
     }
 
@@ -345,9 +347,9 @@ struct ContentView: View {
     }
 
     enum MenuConfirmation {
-        case delete, importRecords, reset
+        case importRecords, reset
     }
-    @State private var menuConfirmation: MenuConfirmation = .delete
+    @State private var menuConfirmation: MenuConfirmation = .importRecords
     @State private var showMenuConfirmation = false
     @State private var importedData: [Record] = []
 
@@ -408,7 +410,6 @@ struct ContentView: View {
 
     var confirmationTitle: String {
         switch menuConfirmation {
-        case .delete: return "Delete?"
         case .importRecords: return "インポート"
         case .reset: return "アプリ内のデータを初期化しますか？"
         }
@@ -416,7 +417,6 @@ struct ContentView: View {
 
     var confirmationMessage: String {
         switch menuConfirmation {
-        case .delete: return "id=\(id), sentence=\(eibun)"
         case .importRecords:
             return "選択した本の\(importedData.count)件を取り込みます。追記、またはDB全体の置き換えを選んでください。「置き換え」は既存のすべての本・記事を削除し、選択した本のデータだけを保存します。"
         case .reset:
@@ -500,14 +500,6 @@ struct ContentView: View {
                     .disabled(!records.indices.contains(current))
             }
             Section {
-                Button(role: .destructive) {
-                    requestConfirmation(.delete)
-                } label: {
-                    Label("削除", systemImage: "trash")
-                }
-                .disabled(!records.indices.contains(current))
-            }
-            Section {
                 Button("エクスポート", systemImage: "square.and.arrow.up") {
                     beginTransfer(.export)
                 }
@@ -562,8 +554,6 @@ struct ContentView: View {
         .confirmationDialog(confirmationTitle, isPresented: $showMenuConfirmation,
                             titleVisibility: .visible) {
             switch menuConfirmation {
-            case .delete:
-                Button("Ok", role: .destructive) { okActionDelete() }
             case .importRecords:
                 Button("置き換え", role: .destructive) { processImport(replacing: true) }
                 Button("追記") { processImport(replacing: false) }
@@ -637,7 +627,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
         VStack(alignment: .center){
-            Text("HelloECompo")
+            Text("ECompo")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
@@ -765,9 +755,11 @@ struct ContentView: View {
                 .presentationDragIndicator(.visible)
             }
             .fullScreenCover(item: $editorSession) { session in
-                RecordEditorView(record: session.record, isNew: session.isNew) { record in
+                RecordEditorView(record: session.record, isNew: session.isNew, onSave: { record in
                     try saveEditor(record, isNew: session.isNew)
-                }
+                }, onDelete: { recordID in
+                    try deleteEditor(id: recordID)
+                })
             }
             .alert("処理エラー", isPresented: Binding(
                 get: { screenError != nil },
@@ -820,16 +812,21 @@ struct RecordEditorView: View {
     @State private var chap: String
     @State private var saveError: String?
     @State private var saving = false
+    @State private var showDeleteConfirmation = false
+    @State private var deleteError: String?
     let isNew: Bool
     let onSave: (Record) throws -> Void
+    let onDelete: (Int) throws -> Void
 
-    init(record: Record, isNew: Bool, onSave: @escaping (Record) throws -> Void) {
+    init(record: Record, isNew: Bool, onSave: @escaping (Record) throws -> Void,
+         onDelete: @escaping (Int) throws -> Void) {
         _draft = State(initialValue: record)
         _line = State(initialValue: String(record.line))
         _page = State(initialValue: String(record.page))
         _chap = State(initialValue: String(record.chap))
         self.isNew = isNew
         self.onSave = onSave
+        self.onDelete = onDelete
     }
 
     var body: some View {
@@ -865,8 +862,18 @@ struct RecordEditorView: View {
             .navigationTitle(isNew ? "新規登録" : "編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("キャンセル") { dismiss() }
+                }
+                if !isNew {
+                    if #available(iOS 26.0, *) {
+                        ToolbarSpacer(.fixed, placement: .topBarLeading)
+                    }
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("削除", role: .destructive) { showDeleteConfirmation = true }
+                            .foregroundStyle(.red)
+                            .disabled(saving)
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }.disabled(saving)
@@ -875,6 +882,31 @@ struct RecordEditorView: View {
                     Spacer()
                     Button("キーボードを閉じる") { UIApplication.shared.closeKeyboard() }
                 }
+            }
+            .confirmationDialog("この記事を削除しますか？", isPresented: $showDeleteConfirmation,
+                                titleVisibility: .visible) {
+                Button("削除", role: .destructive) {
+                    guard !saving else { return }
+                    saving = true
+                    do {
+                        try onDelete(draft.id)
+                        dismiss()
+                    } catch {
+                        saving = false
+                        deleteError = error.localizedDescription
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            } message: {
+                Text("この記事を削除します。未保存の編集内容は保存されません。この操作は取り消せません。")
+            }
+            .alert("削除できません", isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )) {
+                Button("OK", role: .cancel) { deleteError = nil }
+            } message: {
+                Text(deleteError ?? "")
             }
             .alert("保存できません", isPresented: Binding(
                 get: { saveError != nil },
