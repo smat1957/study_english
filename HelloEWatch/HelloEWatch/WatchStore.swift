@@ -10,11 +10,6 @@ enum ImportFormat: String, CaseIterable, Identifiable {
     }
 }
 
-enum SearchScope: String, CaseIterable, Identifiable {
-    case all = "全て", book = "本で", stage = "章で", page = "頁で"
-    var id: String { rawValue }
-}
-
 /// Published state and WCSession operations are handled on the main queue.
 /// File parsing and all SQLite access use one serial worker queue.
 final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
@@ -32,10 +27,10 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
     @Published var selectedBooks: Set<String> = []
     @Published var showImportReview = false
     @Published var errorMessage: String?
-    @Published var selectedBook = ""
-    @Published var selectedStage = ""
-    @Published var selectedPage = 0
-    @Published var scope: SearchScope = .all
+    // nil means all; empty names and page zero remain selectable data values.
+    @Published private(set) var selectedBook: String?
+    @Published private(set) var selectedStage: String?
+    @Published private(set) var selectedPage: Int?
 
     private let dao = DAO()
     private let worker = DispatchQueue(label: "jp.matoike.HelloEWatch.database", qos: .userInitiated)
@@ -89,31 +84,57 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func refreshChoices() {
-        books = Array(Set(records.map(\.book))).sorted()
-        if !books.contains(selectedBook) { selectedBook = books.first ?? "" }
-        stages = Array(Set(records.filter { $0.book == selectedBook }.map(\.stage))).sorted()
-        if !stages.contains(selectedStage) { selectedStage = stages.first ?? "" }
-        // Page search retains the original book + page scope, independent of stage.
-        pages = Array(Set(records.filter { $0.book == selectedBook }.map(\.page))).sorted()
-        if !pages.contains(selectedPage) { selectedPage = pages.first ?? 0 }
+        books = Array(Set(records.map(\.book))).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        if let book = selectedBook, !books.contains(book) {
+            selectedBook = nil
+            selectedStage = nil
+            selectedPage = nil
+        }
+        let bookRecords = records.filter { selectedBook == nil || $0.book == selectedBook }
+        stages = Array(Set(bookRecords.map(\.stage))).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        if let stage = selectedStage, !stages.contains(stage) {
+            selectedStage = nil
+            selectedPage = nil
+        }
+        let stageRecords = bookRecords.filter { selectedStage == nil || $0.stage == selectedStage }
+        pages = Array(Set(stageRecords.map(\.page))).sorted()
+        if let page = selectedPage, !pages.contains(page) { selectedPage = nil }
     }
 
-    func chooseBook(_ book: String) {
+    func chooseBook(_ book: String?) {
+        guard !busy, loaded else { return }
         selectedBook = book
+        selectedStage = nil
+        selectedPage = nil
         refreshChoices()
-        scope = .book
+        search()
+    }
+
+    func chooseStage(_ stage: String?) {
+        guard !busy, loaded else { return }
+        selectedStage = stage
+        selectedPage = nil
+        refreshChoices()
+        search()
+    }
+
+    func choosePage(_ page: Int?) {
+        guard !busy, loaded else { return }
+        selectedPage = page
+        refreshChoices()
         search()
     }
 
     func search() {
         guard !busy, loaded else { return }
         matches = records.filter { record in
-            switch scope {
-            case .all: return true
-            case .book: return record.book == selectedBook
-            case .stage: return record.book == selectedBook && record.stage == selectedStage
-            case .page: return record.book == selectedBook && record.page == selectedPage
-            }
+            (selectedBook == nil || record.book == selectedBook)
+                && (selectedStage == nil || record.stage == selectedStage)
+                && (selectedPage == nil || record.page == selectedPage)
         }
         current = 0
         revision = UUID().uuidString
@@ -171,7 +192,9 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
                     self.records = records
                     self.loaded = true
                     self.busy = false
-                    self.scope = .all
+                    self.selectedBook = nil
+                    self.selectedStage = nil
+                    self.selectedPage = nil
                     self.refreshChoices()
                     self.search()
                     self.importStatus = "\(selected.count)件を\(replacing ? "置き換えて" : "追記して")取り込みました"

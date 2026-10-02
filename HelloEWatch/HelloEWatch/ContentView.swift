@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var showFormat = false
     @State private var importing = false
     @State private var chooseFileAfterDismiss = false
+    @State private var showAbout = false
 
     var body: some View {
         NavigationStack {
@@ -29,35 +30,32 @@ struct ContentView: View {
                 }
                 if !store.records.isEmpty {
                     Section("検索") {
-                        Picker("対象", selection: Binding(get: { store.scope }, set: {
-                            store.scope = $0; store.search()
-                        })) {
-                            ForEach(SearchScope.allCases) { Text($0.rawValue).tag($0) }
-                        }
                         Picker("本", selection: Binding(get: { store.selectedBook }, set: {
                             store.chooseBook($0)
                         })) {
+                            Text("すべて").tag(nil as String?)
                             ForEach(store.books, id: \.self) {
-                                Text($0.isEmpty ? "（本の名前なし）" : $0).tag($0)
+                                Text($0.isEmpty ? "（本の名前なし）" : $0).tag(Optional($0))
                             }
                         }
                         if !store.stages.isEmpty {
                             Picker("章", selection: Binding(get: { store.selectedStage }, set: {
-                                store.selectedStage = $0; store.scope = .stage; store.search()
+                                store.chooseStage($0)
                             })) {
+                                Text("すべて").tag(nil as String?)
                                 ForEach(store.stages, id: \.self) {
-                                    Text($0.isEmpty ? "（章なし）" : $0).tag($0)
+                                    Text($0.isEmpty ? "（章なし）" : $0).tag(Optional($0))
                                 }
                             }
                         }
                         if !store.pages.isEmpty {
                             Picker("頁", selection: Binding(get: { store.selectedPage }, set: {
-                                store.selectedPage = $0; store.scope = .page; store.search()
+                                store.choosePage($0)
                             })) {
-                                ForEach(store.pages, id: \.self) { Text(String($0)).tag($0) }
+                                Text("すべて").tag(nil as Int?)
+                                ForEach(store.pages, id: \.self) { Text(String($0)).tag(Optional($0)) }
                             }
                         }
-                        Button("検索") { store.search() }
                     }.disabled(store.busy)
                 }
                 Section("Apple Watch") {
@@ -76,6 +74,20 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("WatchEWord")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { showAbout = true } label: {
+                            Label("About", systemImage: "info.circle")
+                        }
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("設定")
+                }
+            }
+            .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showFormat, onDismiss: {
                 if chooseFileAfterDismiss { chooseFileAfterDismiss = false; importing = true }
             }) {
