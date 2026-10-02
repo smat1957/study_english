@@ -1,6 +1,8 @@
-# HelloEWatch / WatchEWord
+# WatchEWord
 
 HelloEWordでエクスポートした単語をiPhoneで取り込み、Apple Watchで単語と意味を閲覧するアプリです。
+
+iPhone・Apple Watchのアプリ表示名はどちらも **WatchEWord** です。プロジェクト名・Scheme名は従来のHelloEWatch／EWatch Watch Appを使用します。Bundle IDは維持しており、既存アプリの更新としてインストールする設定です。
 
 ## 開発環境と実機へのインストール
 
@@ -95,7 +97,7 @@ Versionはアプリの `CFBundleShortVersionString`、Revisionは `CFBundleVersi
 9. Watchの送信、左右スワイプによる前後移動、先頭・末尾、意味の表示切り替え、長文スクロール、前後移動用矢印が表示されないことを確認する。
 10. 連打、iPhoneでの検索変更中のWatch操作、未接続・再接続、アプリの再起動で番号と単語が一致する。
 11. 未接続時は直前の1件を保持し、更新で再試行できる。検索0件を同期すると古い単語が消える。
-12. iPhone・Watch両方のホーム画面でアイコンを確認する。
+12. iPhone・Watch両方のホーム画面でアイコンとアプリ表示名「WatchEWord」を確認する。
 13. 本を変更すると章・頁が「すべて」に戻り、その本の章だけを自然順で表示する（1、2、10など）。章を変更すると頁が「すべて」に戻り、その本・章の頁だけを数値順で表示する。
 14. 「すべて」と空の本名・章名、頁0を区別して検索できる。引用符を含む本名や検索0件でもクラッシュせず、取り込み成功後は3項目とも「すべて」に戻る。
 15. タイトル行右端の歯車からAboutを開き、WatchEWordのアイコン・Version・Revisionと「WatchEWordについて」が表示され、「閉じる」で戻れる。
