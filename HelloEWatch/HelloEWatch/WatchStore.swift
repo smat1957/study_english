@@ -15,6 +15,9 @@ private struct ReadingState: Codable {
     let selectedStage: String?
     let selectedPage: Int?
     let wordID: Int?
+    let transferMode: String?
+    let orderIDs: [Int]?
+    let transferFinished: Bool?
 }
 
 /// Published state and WCSession operations are handled on the main queue.
@@ -28,6 +31,7 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
     @Published private(set) var busy = true
     @Published private(set) var loaded = false
     @Published private(set) var current = 0
+    @Published private(set) var transferMode: TransferMode = .normal
     @Published private(set) var connectionStatus = "Watch接続を準備しています"
     @Published private(set) var importStatus = ""
     @Published private(set) var pendingRecords: [Words] = []
@@ -41,6 +45,14 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
 
     private let dao = DAO()
     private let readingStateKey = "WatchEWord.readingState.v1"
+    private var transferFinished = false
+    private var orderedMatches: [Words] = []
+    private var canMovePrevious: Bool {
+        !matches.isEmpty && (current > 0 || transferMode == .repeating || transferMode == .random)
+    }
+    private var canMoveNext: Bool {
+        !matches.isEmpty && !transferFinished && (current < matches.count - 1 || transferMode != .normal)
+    }
     private let worker = DispatchQueue(label: "jp.matoike.HelloEWatch.database", qos: .userInitiated)
     private var revision = UUID().uuidString
     private let timestampKey = "WatchEWord.lastSnapshotTimestamp.v1"
@@ -136,24 +148,95 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
         search()
     }
 
-    func search(restoringWordID: Int? = nil) {
+    func search(restoringWordID: Int? = nil, restoringOrder: [Int]? = nil, restoringFinished: Bool = false) {
         guard !busy, loaded else { return }
-        matches = records.filter { record in
+        orderedMatches = records.filter { record in
             (selectedBook == nil || record.book == selectedBook)
                 && (selectedStage == nil || record.stage == selectedStage)
                 && (selectedPage == nil || record.page == selectedPage)
         }
-        // Database IDs remain stable even when appended words change the sort order.
-        current = restoringWordID.flatMap { id in matches.firstIndex { $0.id == id } } ?? 0
+        rebuildTransferOrder(restoringWordID: restoringWordID, savedOrder: restoringOrder)
+        transferFinished = transferMode == .normal && restoringFinished
+            && restoringWordID != nil && matches.indices.contains(current)
+            && matches[current].id == restoringWordID
         revision = UUID().uuidString
         publishSnapshot()
+    }
+
+    func cycleTransferMode() {
+        guard loaded, !busy else { return }
+        let modes = TransferMode.allCases
+        guard let index = modes.firstIndex(of: transferMode) else { return }
+        transferMode = modes[(index + 1) % modes.count]
+        transferFinished = false
+        rebuildTransferOrder()
+        sendToWatch()
+    }
+
+    private func rebuildTransferOrder(restoringWordID: Int? = nil, savedOrder: [Int]? = nil) {
+        matches = orderedMatches
+        if transferMode.isRandom {
+            if let ids = savedOrder, ids.count == orderedMatches.count,
+               Set(ids) == Set(orderedMatches.map(\.id)) {
+                let byID = Dictionary(uniqueKeysWithValues: orderedMatches.map { ($0.id, $0) })
+                matches = ids.compactMap { byID[$0] }
+            } else {
+                matches.shuffle()
+                // Start a new random pass with the currently displayed word.
+                if let id = restoringWordID, let index = matches.firstIndex(where: { $0.id == id }) {
+                    let entry = matches.remove(at: index)
+                    matches.insert(entry, at: 0)
+                }
+            }
+        }
+        current = restoringWordID.flatMap { id in matches.firstIndex { $0.id == id } } ?? 0
+    }
+
+    private func moveWord(to target: Int) {
+        guard !matches.isEmpty, target == current - 1 || target == current + 1 else { return }
+        guard (target < current ? canMovePrevious : canMoveNext) else { return }
+        if matches.indices.contains(target) {
+            transferFinished = false
+            current = target
+            if current == matches.count - 1, transferMode == .randomOnce {
+                let wordID = matches[current].id
+                transferMode = .normal
+                transferFinished = true
+                rebuildTransferOrder(restoringWordID: wordID)
+                revision = UUID().uuidString
+            }
+            return
+        }
+        if target == -1 {
+            if canMovePrevious { current = matches.count - 1 }
+            return
+        }
+        guard target == matches.count, canMoveNext else { return }
+        switch transferMode {
+        case .normal: return
+        case .repeating: current = 0
+        case .random:
+            let previousID = matches[current].id
+            rebuildTransferOrder()
+            // Avoid the same word on both sides of the cycle boundary when possible.
+            if matches.count > 1, matches[0].id == previousID { matches.swapAt(0, 1) }
+        case .randomOnce:
+            let wordID = matches[current].id
+            transferMode = .normal
+            transferFinished = true
+            rebuildTransferOrder(restoringWordID: wordID)
+        }
+        revision = UUID().uuidString
     }
 
     private func saveReadingState() {
         guard loaded, !busy else { return }
         let wordID = matches.indices.contains(current) ? matches[current].id : nil
         let state = ReadingState(selectedBook: selectedBook, selectedStage: selectedStage,
-                                 selectedPage: selectedPage, wordID: wordID)
+                                 selectedPage: selectedPage, wordID: wordID,
+                                 transferMode: transferMode.rawValue,
+                                 orderIDs: transferMode.isRandom ? matches.map(\.id) : nil,
+                                 transferFinished: transferFinished)
         do {
             let data = try JSONEncoder().encode(state)
             UserDefaults.standard.set(data, forKey: readingStateKey)
@@ -169,9 +252,13 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
         selectedBook = state?.selectedBook
         selectedStage = state?.selectedStage
         selectedPage = state?.selectedPage
+        // The removed one-repeat mode now corresponds to search-order, one pass.
+        transferMode = state?.transferMode == "repeatOnce" ? .normal
+            : (state?.transferMode).flatMap { TransferMode(rawValue: $0) } ?? .normal
         // Validate saved selections against the freshly loaded database before searching.
         refreshChoices()
-        search(restoringWordID: state?.wordID)
+        search(restoringWordID: state?.wordID, restoringOrder: state?.orderIDs,
+               restoringFinished: state?.transferFinished ?? false)
     }
 
     func readImport(_ url: URL, format: ImportFormat) {
@@ -250,8 +337,9 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
         }
         lastTimestamp = max(Date().timeIntervalSince1970, lastTimestamp + 0.001)
         UserDefaults.standard.set(lastTimestamp, forKey: timestampKey)
-        return try? JSONEncoder().encode(WatchSnapshot(protocolVersion: 1, revision: revision,
-            updatedAt: lastTimestamp, current: current, count: matches.count, entry: entry))
+        return try? JSONEncoder().encode(WatchSnapshot(protocolVersion: 2, revision: revision,
+            updatedAt: lastTimestamp, current: current, count: matches.count, entry: entry,
+            canMovePrevious: canMovePrevious, canMoveNext: canMoveNext))
     }
 
     private func publishSnapshot() {
@@ -348,7 +436,7 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
                 replyHandler(["error": "iPhoneでデータを準備中です。もう一度お試しください。"])
                 return
             }
-            guard let version = message["protocolVersion"] as? Int, version == 1,
+            guard let version = message["protocolVersion"] as? Int, version == 2,
                   let command = message["command"] as? String,
                   let clientID = message["clientID"] as? String, UUID(uuidString: clientID) != nil,
                   let serial = message["requestSerial"] as? Int, serial > 0,
@@ -364,8 +452,8 @@ final class WatchStore: NSObject, ObservableObject, WCSessionDelegate {
                     return
                 }
                 // A request from an old search gets the new search's current display.
-                if isNewRequest, revision == self.revision, self.matches.indices.contains(target) {
-                    self.current = target
+                if isNewRequest, revision == self.revision {
+                    self.moveWord(to: target)
                 }
             }
             // Do not let a delayed/repeated command undo a newer navigation request.

@@ -15,7 +15,7 @@ struct ContentView: View {
                 Section("単語データ") {
                     Text("保存済み \(store.records.count)件 ／ 検索結果 \(store.matches.count)件")
                     Button { showFormat = true } label: {
-                        Label("HelloEWordのデータをインポート", systemImage: "square.and.arrow.down")
+                        Label("EWordのデータをインポート", systemImage: "square.and.arrow.down")
                     }.disabled(store.busy || !store.loaded)
                     if !store.importStatus.isEmpty {
                         Text(store.importStatus).font(.footnote).foregroundStyle(.secondary)
@@ -60,8 +60,26 @@ struct ContentView: View {
                 }
                 Section("Apple Watch") {
                     Text(store.connectionStatus).font(.footnote)
-                    Button { store.sendToWatch() } label: {
-                        Label("検索結果をWatchに送る", systemImage: "applewatch.and.arrow.forward")
+                    HStack {
+                        Button { store.sendToWatch() } label: {
+                            Label(store.transferMode.title, systemImage: "applewatch.and.arrow.forward")
+                        }.buttonStyle(.borderless)
+                        Spacer(minLength: 8)
+                        Button { store.cycleTransferMode() } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: store.transferMode.symbol)
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .frame(width: 36, height: 32)
+                                if store.transferMode.isOnce {
+                                    Text("1").font(.system(size: 10, weight: .bold))
+                                        .padding(2)
+                                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Circle())
+                                }
+                            }.foregroundStyle(store.transferMode.color)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(store.transferMode.title)
+                        .accessibilityHint("タップして次の転送モードに切り替え、先頭の単語をWatchに送信")
                     }.disabled(store.busy || !store.loaded)
                     if store.matches.indices.contains(store.current) {
                         Text("\(store.current + 1) / \(store.matches.count)").foregroundStyle(.secondary)

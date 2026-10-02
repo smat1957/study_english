@@ -61,7 +61,10 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
     func move(_ offset: Int) {
         guard let snapshot = snapshot, offset == -1 || offset == 1 else { return }
         let target = snapshot.current + offset
-        guard target >= 0, target < snapshot.count else { return }
+        let allowed = offset < 0
+            ? (snapshot.canMovePrevious ?? (snapshot.current > 0))
+            : (snapshot.canMoveNext ?? (snapshot.current < snapshot.count - 1))
+        guard snapshot.count > 0, allowed else { return }
         request(command: "move", target: target, revision: snapshot.revision)
     }
 
@@ -85,7 +88,7 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
         pendingID = identifier
         waiting = true
         status = "iPhoneと通信しています…"
-        var message: [String: Any] = ["protocolVersion": 1, "command": command,
+        var message: [String: Any] = ["protocolVersion": 2, "command": command,
                                      "clientID": clientID, "requestSerial": requestSerial]
         if let target = target { message["target"] = target }
         if let revision = revision { message["revision"] = revision }

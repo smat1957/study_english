@@ -17,9 +17,12 @@ struct WatchSnapshot: Codable {
     let current: Int
     let count: Int
     let entry: WatchWord?
+    let canMovePrevious: Bool?
+    let canMoveNext: Bool?
 
     var isValid: Bool {
-        protocolVersion == 1 && !revision.isEmpty && updatedAt.isFinite
+        (protocolVersion == 1 || protocolVersion == 2) && !revision.isEmpty && updatedAt.isFinite
+            && (protocolVersion == 1 || (canMovePrevious != nil && canMoveNext != nil))
             && count >= 0 && current >= 0
             && (count == 0 ? current == 0 && entry == nil : current < count && entry != nil)
     }
