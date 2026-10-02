@@ -35,9 +35,18 @@ struct ContentView: View {
                 if !connector.status.isEmpty {
                     Text(connector.status).font(.caption2).foregroundStyle(.secondary)
                 }
-                Button { connector.refresh() } label: {
-                    Label("更新", systemImage: "arrow.clockwise")
-                }.disabled(connector.waiting)
+                if connector.needsResync {
+                    Button { connector.refresh() } label: {
+                        Label("再同期", systemImage: "arrow.clockwise")
+                            .font(.caption2)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.quaternary, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!connector.isConnected || connector.waiting)
+                    .accessibilityLabel("iPhoneと再同期")
+                }
             }.padding(.horizontal, 4)
         }
         .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { gesture in

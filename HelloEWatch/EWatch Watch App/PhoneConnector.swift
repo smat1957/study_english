@@ -6,6 +6,7 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
     @Published private(set) var snapshot: WatchSnapshot?
     @Published private(set) var isConnected = false
     @Published private(set) var waiting = false
+    @Published private(set) var needsResync = false
     @Published private(set) var status = "iPhone接続を準備しています"
 
     private let cacheKey = "WatchEWord.currentSnapshot.v1"
@@ -38,11 +39,20 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
     @discardableResult
     private func apply(_ data: Data) -> Bool {
         guard let incoming = try? JSONDecoder().decode(WatchSnapshot.self, from: data),
-              incoming.isValid else { return false }
+              incoming.isValid else {
+            needsResync = true
+            status = "受信データが不正です。両方のアプリを更新してください"
+            return false
+        }
         // Context delivery and replies can arrive in either order.
         if let snapshot = snapshot, incoming.updatedAt < snapshot.updatedAt { return true }
         snapshot = incoming
         UserDefaults.standard.set(data, forKey: cacheKey)
+        // Ignored older data must not clear a previous synchronization failure.
+        needsResync = false
+        if !waiting {
+            status = incoming.count == 0 ? "iPhoneでデータを取り込むか検索条件を変更してください" : ""
+        }
         return true
     }
 
@@ -59,11 +69,13 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
         guard !waiting else { return }
         guard let session = wcSession, session.activationState == .activated, session.isReachable else {
             isConnected = false
+            needsResync = true
             status = snapshot == nil ? "iPhoneのWatchEWordを開いてください" : "iPhoneに接続できません。直前の単語を表示しています"
             return
         }
         let identifier = UUID()
         guard requestSerial < Int.max else {
+            needsResync = true
             status = "通信番号を更新できません。Watchアプリを再インストールしてください"
             return
         }
@@ -82,10 +94,16 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
                 guard self.pendingID == identifier else { return }
                 self.finishRequest()
                 if let error = reply["error"] as? String {
+                    self.needsResync = true
                     self.status = error
                 } else if let data = reply["snapshot"] as? Data, self.apply(data) {
-                    self.status = self.snapshot?.count == 0 ? "iPhoneでデータを取り込むか検索条件を変更してください" : ""
+                    if self.needsResync {
+                        self.status = "最新の表示を確認できませんでした。再同期で再試行してください"
+                    } else {
+                        self.updateConnection()
+                    }
                 } else {
+                    self.needsResync = true
                     self.status = "受信データが不正です。両方のアプリを更新してください"
                 }
             }
@@ -93,13 +111,15 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
             DispatchQueue.main.async {
                 guard self.pendingID == identifier else { return }
                 self.finishRequest()
-                self.status = "通信に失敗しました。更新ボタンで再試行してください。\n\(error.localizedDescription)"
+                self.needsResync = true
+                self.status = "通信に失敗しました。再同期で再試行してください。\n\(error.localizedDescription)"
             }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
             guard self.pendingID == identifier else { return }
             self.finishRequest()
-            self.status = "iPhoneの応答がありません。更新ボタンで再試行してください"
+            self.needsResync = true
+            self.status = "iPhoneの応答がありません。再同期で再試行してください"
         }
     }
 
@@ -112,10 +132,11 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
         guard let session = wcSession else { return }
         isConnected = session.activationState == .activated && session.isReachable
         if !isConnected {
+            if waiting { needsResync = true }
             finishRequest()
             status = snapshot == nil ? "iPhoneのWatchEWordを開いてください" : "未接続：直前の単語を表示しています"
-        } else if !waiting {
-            status = ""
+        } else if !waiting && !needsResync {
+            status = snapshot?.count == 0 ? "iPhoneでデータを取り込むか検索条件を変更してください" : ""
         }
     }
 
@@ -125,7 +146,10 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
             if let data = session.receivedApplicationContext["snapshot"] as? Data {
                 if !self.apply(data) { self.status = "受信データが不正です" }
             }
-            if let error = error { self.status = error.localizedDescription }
+            if let error = error {
+                self.needsResync = true
+                self.status = error.localizedDescription
+            }
             else if self.isConnected { self.refresh() }
         }
     }
@@ -140,6 +164,7 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         DispatchQueue.main.async {
             guard let data = applicationContext["snapshot"] as? Data, self.apply(data) else {
+                self.needsResync = true
                 self.status = "受信データが不正です。両方のアプリを更新してください"
                 return
             }
@@ -151,6 +176,8 @@ final class PhoneConnector: NSObject, ObservableObject, WCSessionDelegate {
                  replyHandler: @escaping ([String: Any]) -> Void) {
         DispatchQueue.main.async {
             guard let data = message["snapshot"] as? Data else {
+                self.needsResync = true
+                self.status = "受信データが不正です。両方のアプリを更新してください"
                 replyHandler(["accepted": false])
                 return
             }
