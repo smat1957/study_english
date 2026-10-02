@@ -63,11 +63,48 @@ struct ContentView: View {
     @State private var showingError = false
     @State private var hiddenFields: Set<String> = ["語釈", "類似語", "反意語", "関連語", "備考"]
     @State private var movingForward = true
+    @Environment(\.scenePhase) private var scenePhase
+    private let browsingStateKey = "EWord.browsingState.v1"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var active: Words? { records.indices.contains(current) ? records[current] : nil }
     private var transition: AnyTransition {
         reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: movingForward ? .trailing : .leading).combined(with: .opacity), removal: .move(edge: movingForward ? .leading : .trailing).combined(with: .opacity))
+    }
+
+    private func saveBrowsingState() {
+        guard initialized else { return }
+        let state = SavedWordBrowsingState(book: selectedBook, stage: searchStage,
+            page: searchPage, number: searchNumber, recordID: active?.id, hiddenFields: hiddenFields)
+        if let data = try? JSONEncoder().encode(state) {
+            UserDefaults.standard.set(data, forKey: browsingStateKey)
+        }
+    }
+
+    private func restoreBrowsingState() throws {
+        let availableBooks = try dao.books()
+        let saved = UserDefaults.standard.data(forKey: browsingStateKey)
+            .flatMap { try? JSONDecoder().decode(SavedWordBrowsingState.self, from: $0) }
+        clearSearchInputs()
+        current = 0
+        if let saved {
+            let knownFields: Set<String> = ["意味", "語釈", "類似語", "反意語", "関連語", "英文", "和文", "備考"]
+            hiddenFields = saved.hiddenFields.intersection(knownFields)
+            if availableBooks.contains(saved.book) {
+                selectedBook = saved.book
+                searchStage = saved.stage; searchPage = saved.page; searchNumber = saved.number
+                // refresh validates the hierarchy before restoring the stable record ID.
+                try refresh(preferredID: saved.recordID)
+                return
+            }
+        }
+        selectedBook = availableBooks.first ?? ""
+        try refresh()
+    }
+
+    private func resetBrowsingState() {
+        UserDefaults.standard.removeObject(forKey: browsingStateKey)
+        saveBrowsingState()
     }
 
     private func report(_ error: Error) {
@@ -91,10 +128,11 @@ struct ContentView: View {
         if let preferredID, let index = records.firstIndex(where: { $0.id == preferredID }) {
             current = index
         } else { current = min(max(current, 0), max(records.count - 1, 0)) }
+        saveBrowsingState()
     }
 
     private func search() {
-        do { try refresh(); current = 0 } catch { report(error) }
+        do { try refresh(); current = 0; saveBrowsingState() } catch { report(error) }
     }
 
     private func clearSearchInputs() {
@@ -146,6 +184,7 @@ struct ContentView: View {
         guard records.indices.contains(next) else { return }
         movingForward = forward
         withAnimation(.easeInOut(duration: 0.28)) { current = next }
+        saveBrowsingState()
     }
 
     private func save(_ record: Words, isNew: Bool) throws {
@@ -298,7 +337,7 @@ struct ContentView: View {
                     ContentUnavailableView("単語がありません", systemImage: "book.closed", description: Text("検索条件を変更するか、歯車メニューから新規登録・インポートしてください。"))
                 }
                 HStack {
-                    Button { current = 0 } label: { Image(systemName: "backward.end") }
+                    Button { current = 0; saveBrowsingState() } label: { Image(systemName: "backward.end") }
                         .disabled(records.isEmpty || current == 0).accessibilityLabel("最初の単語")
                     Spacer()
                     Button { move(false) } label: { Image(systemName: "chevron.left") }
@@ -307,7 +346,7 @@ struct ContentView: View {
                     Button { move(true) } label: { Image(systemName: "chevron.right") }
                         .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("次の単語")
                     Spacer()
-                    Button { current = max(records.count - 1, 0) } label: { Image(systemName: "forward.end") }
+                    Button { current = max(records.count - 1, 0); saveBrowsingState() } label: { Image(systemName: "forward.end") }
                         .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("最後の単語")
                 }.buttonStyle(.bordered).padding(.horizontal).padding(.bottom, 8).padding(.trailing, 70)
             }
@@ -336,11 +375,13 @@ struct ContentView: View {
                 guard !initialized else { return }
                 do {
                     try dao.initial()
-                    books = try dao.books()
-                    selectedBook = books.first ?? ""
-                    try refresh()
+                    try restoreBrowsingState()
                     initialized = true
+                    saveBrowsingState()
                 } catch { report(error) }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .inactive || phase == .background { saveBrowsingState() }
             }
             .fullScreenCover(item: $editor, onDismiss: {
                 if !deferredReadError.isEmpty {
@@ -391,6 +432,7 @@ struct ContentView: View {
                         try dao.clearAllRecords()
                         clearSearchInputs()
                         records = []; books = []; selectedBook = ""; current = 0
+                        resetBrowsingState()
                     } catch { report(error) }
                 }
                 Button("キャンセル", role: .cancel) { }
@@ -423,6 +465,7 @@ struct ContentView: View {
             Button {
                 if hiddenFields.contains(title) { hiddenFields.remove(title) }
                 else { hiddenFields.insert(title) }
+                saveBrowsingState()
             } label: {
                 Image(systemName: hiddenFields.contains(title) ? "circle" : "checkmark.circle.fill")
                     .font(.system(size: 18))
@@ -707,4 +750,14 @@ private struct CompactFieldLayout: Layout {
                           anchor: .topLeading, proposal: ProposedViewSize(rows.sizes[index]))
         }
     }
+}
+
+/// Store search selections and record identity, never a stale copy of database rows.
+private struct SavedWordBrowsingState: Codable {
+    let book: String
+    let stage: String?
+    let page: Int?
+    let number: Int?
+    let recordID: Int?
+    let hiddenFields: Set<String>
 }
