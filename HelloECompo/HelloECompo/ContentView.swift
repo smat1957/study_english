@@ -569,7 +569,7 @@ struct ContentView: View {
     var browsingHeader: some View {
         HStack(spacing: 8) {
             Text("\(records.isEmpty ? 0 : current + 1)/\(records.count)")
-                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .font(.system(.footnote, design: .rounded, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, 8)
@@ -578,7 +578,7 @@ struct ContentView: View {
                 .fixedSize()
                 .accessibilityLabel("現在レコードと総件数")
             Text("P.\(page)/L.\(line)")
-                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .font(.system(.footnote, design: .rounded, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, 8)
@@ -593,7 +593,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(selectedBook.isEmpty ? "本を選択" : selectedBook)
-                        .font(.caption.weight(.medium))
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -711,6 +711,13 @@ struct ContentView: View {
                 Spacer()
                 Button { swipeArticle(forward: false) } label: { Image(systemName: "chevron.left") }
                     .disabled(records.isEmpty || current == 0).accessibilityLabel("前の記事")
+                Spacer()
+                Text("\(records.isEmpty ? 0 : current + 1)/\(records.count)")
+                    .font(.system(.footnote, design: .rounded, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.accentColor)
+                    .fixedSize()
+                    .accessibilityLabel("現在の記事位置と検索結果の件数")
                 Spacer()
                 Button { swipeArticle(forward: true) } label: { Image(systemName: "chevron.right") }
                     .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("次の記事")
