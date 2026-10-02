@@ -68,6 +68,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var active: Words? { records.indices.contains(current) ? records[current] : nil }
+    private var positionText: String { records.isEmpty ? "0/0" : "\(current + 1)/\(records.count)" }
     private var transition: AnyTransition {
         reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: movingForward ? .trailing : .leading).combined(with: .opacity), removal: .move(edge: movingForward ? .leading : .trailing).combined(with: .opacity))
     }
@@ -152,7 +153,7 @@ struct ContentView: View {
 
     private func searchField(_ title: String, target: WordSearch, choices: [String], selected: String?, enabled: Bool) -> some View {
         HStack(spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.blue)
+            Text(title).font(.footnote).foregroundStyle(.primary)
             Menu {
                 Button("すべて") { chooseFilter(target, value: nil) }
                 ForEach(choices, id: \.self) { value in
@@ -164,6 +165,7 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.down").font(.caption2)
                 }
+                .foregroundStyle(.primary)
                 .font(.subheadline)
                 .padding(.horizontal, 6).padding(.vertical, 8)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
@@ -263,19 +265,19 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 8) {
                 HStack {
-                    Text(records.isEmpty ? "0/0" : "\(current + 1)/\(records.count)")
-                        .font(.system(.caption, design: .rounded, weight: .semibold))
+                    Text(positionText)
+                        .font(.system(.footnote, design: .rounded, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 7)
                         .background(Color.accentColor.opacity(0.09), in: Capsule())
                         .fixedSize()
                         .accessibilityLabel("現在レコードと総件数")
                     Text("P.\(active?.page ?? 0)/No.\(active?.numb ?? 0)")
-                        .font(.system(.caption, design: .rounded, weight: .semibold))
+                        .font(.system(.footnote, design: .rounded, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 7)
                         .background(Color.accentColor.opacity(0.09), in: Capsule())
@@ -287,7 +289,8 @@ struct ContentView: View {
                         }
                     } label: {
                         Label(selectedBook.isEmpty ? "本を選択" : selectedBook, systemImage: "book")
-                            .font(.caption.weight(.medium))
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
@@ -342,7 +345,14 @@ struct ContentView: View {
                     Spacer()
                     Button { move(false) } label: { Image(systemName: "chevron.left") }
                         .disabled(records.isEmpty || current == 0).accessibilityLabel("前の単語")
-                    Spacer()
+                    Spacer(minLength: 4)
+                    Text(positionText)
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(Color.accentColor)
+                        .fixedSize()
+                        .accessibilityLabel("現在位置と検索結果の件数")
+                    Spacer(minLength: 4)
                     Button { move(true) } label: { Image(systemName: "chevron.right") }
                         .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("次の単語")
                     Spacer()
