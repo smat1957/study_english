@@ -58,7 +58,6 @@ struct ContentView: View {
     @State private var pendingRecords: [Words] = []
     @State private var confirmImport = false
     @State private var pendingImportConfirmation = false
-    @State private var confirmDelete = false
     @State private var confirmReset = false
     @State private var errorMessage = ""
     @State private var showingError = false
@@ -160,6 +159,16 @@ struct ContentView: View {
         catch {
             records = []; current = 0
             deferredReadError = "保存は完了しましたが、表示の更新に失敗しました。\n" + error.localizedDescription
+        }
+    }
+
+    private func deleteRecord(id: Int) throws {
+        try dao.delete(id: id)
+        records.removeAll { $0.id == id }
+        current = min(current, max(records.count - 1, 0))
+        do { try refresh() }
+        catch {
+            deferredReadError = "削除は完了しましたが、表示の更新に失敗しました。\n" + error.localizedDescription
         }
     }
 
@@ -302,14 +311,12 @@ struct ContentView: View {
                         .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("最後の単語")
                 }.buttonStyle(.bordered).padding(.horizontal).padding(.bottom, 8).padding(.trailing, 70)
             }
-            .navigationTitle("HelloEWord")
+            .navigationTitle("EWord")
             .navigationBarTitleDisplayMode(.inline)
             .overlay(alignment: .bottomTrailing) {
                 Menu {
                     Button { editor = EditorSession(record: Words(book: selectedBook), isNew: true) } label: { Label("新規", systemImage: "plus") }
                     Button { if let active { editor = EditorSession(record: active, isNew: false) } } label: { Label("編集", systemImage: "pencil") }.disabled(active == nil)
-                    Divider()
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("削除", systemImage: "trash") }.disabled(active == nil)
                     Divider()
                     Button { openTransfer(.questions) } label: { Label("出題用JSON", systemImage: "shuffle") }.disabled(active == nil)
                     Button { openTransfer(.exporting) } label: { Label("エクスポート", systemImage: "square.and.arrow.up") }
@@ -342,7 +349,9 @@ struct ContentView: View {
                     showingError = true
                 }
             }) { session in
-                WordEditor(record: session.record, isNew: session.isNew) { try save($0, isNew: session.isNew) }
+                WordEditor(record: session.record, isNew: session.isNew,
+                           onSave: { try save($0, isNew: session.isNew) },
+                           onDelete: { try deleteRecord(id: session.record.id) })
             }
             .sheet(isPresented: $showingAbout) { AboutView() }
             .sheet(item: $transfer, onDismiss: {
@@ -376,19 +385,6 @@ struct ContentView: View {
                 Button("全データを置き換え", role: .destructive) { applyImport(replacing: true) }
                 Button("キャンセル", role: .cancel) { pendingRecords = [] }
             } message: { Text("選択した\(Set(pendingRecords.map(\.book)).count)冊・\(pendingRecords.count)件を取り込みます。置き換えは、選択していない本も含め既存の全単語を削除します。追記では同じデータも追加されます。") }
-            .alert("この単語を削除しますか？", isPresented: $confirmDelete) {
-                Button("削除", role: .destructive) {
-                    guard let active else { return }
-                    do {
-                        try dao.delete(id: active.id)
-                        records.removeAll { $0.id == active.id }
-                        current = min(current, max(records.count - 1, 0))
-                        do { try refresh() }
-                        catch { report(DataError.database("削除は完了しましたが、表示の更新に失敗しました。\n" + error.localizedDescription)) }
-                    } catch { report(error) }
-                }
-                Button("キャンセル", role: .cancel) { }
-            } message: { Text(active?.word ?? "") }
             .alert("すべての単語を削除しますか？", isPresented: $confirmReset) {
                 Button("すべて削除して初期化", role: .destructive) {
                     do {
@@ -504,14 +500,19 @@ private struct WordEditor: View {
     @State private var showingError = false
     @State private var saving = false
     let isNew: Bool
+    @State private var confirmDelete = false
+    let deletionTarget: Words
     let onSave: (Words) throws -> Void
+    let onDelete: () throws -> Void
 
-    init(record: Words, isNew: Bool, onSave: @escaping (Words) throws -> Void) {
+    init(record: Words, isNew: Bool, onSave: @escaping (Words) throws -> Void,
+         onDelete: @escaping () throws -> Void) {
         _draft = State(initialValue: record)
         _page = State(initialValue: String(record.page))
         _numb = State(initialValue: String(record.numb))
         _sequence = State(initialValue: String(record.seq))
         self.isNew = isNew; self.onSave = onSave
+        self.deletionTarget = record; self.onDelete = onDelete
     }
 
     var body: some View {
@@ -542,10 +543,22 @@ private struct WordEditor: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(isNew ? "新規登録" : "単語を編集")
+            .navigationTitle(isNew ? "新規登録" : "編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("キャンセル") { dismiss() }.disabled(saving)
+                }
+                if !isNew {
+                    if #available(iOS 26.0, *) {
+                        ToolbarSpacer(.fixed, placement: .topBarLeading)
+                    }
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("削除", role: .destructive) { confirmDelete = true }
+                            .foregroundStyle(.red)
+                            .disabled(saving)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
                         guard !saving else { return }
@@ -562,7 +575,24 @@ private struct WordEditor: View {
                 }
             }
             .interactiveDismissDisabled()
-            .alert("保存できません", isPresented: $showingError) { Button("閉じる", role: .cancel) { } } message: { Text(errorMessage) }
+            .alert("この単語を削除しますか？", isPresented: $confirmDelete) {
+                Button("削除", role: .destructive) {
+                    guard !saving else { return }
+                    saving = true
+                    do {
+                        try onDelete()
+                        dismiss()
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        showingError = true
+                        saving = false
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            } message: {
+                Text("\(deletionTarget.word)\n未保存の変更は保存せず、この単語を削除します。")
+            }
+            .alert("処理できません", isPresented: $showingError) { Button("閉じる", role: .cancel) { } } message: { Text(errorMessage) }
         }
     }
 

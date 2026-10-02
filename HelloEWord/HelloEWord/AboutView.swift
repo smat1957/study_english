@@ -14,9 +14,9 @@ struct AboutView: View {
                     .scaledToFit()
                     .frame(width: 120, height: 120)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
-                    .accessibilityLabel("HelloEWordのアプリアイコン")
+                    .accessibilityLabel("EWordのアプリアイコン")
 
-                Text("HelloEWord")
+                Text("EWord")
                     .font(.title2.bold())
 
                 VStack(spacing: 12) {
@@ -27,7 +27,7 @@ struct AboutView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("HelloEWordについて")
+            .navigationTitle("EWordについて")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
