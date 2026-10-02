@@ -349,7 +349,7 @@ struct ContentView: View {
                     Text(positionText)
                         .font(.footnote)
                         .monospacedDigit()
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                         .fixedSize()
                         .accessibilityLabel("現在位置と検索結果の件数")
                     Spacer(minLength: 4)
