@@ -29,11 +29,13 @@ struct ContentView: View {
     @State private var records: [Words] = []
     @State private var books: [String] = []
     @State private var selectedBook = ""
-    @State private var scope = WordSearch.book
-    @State private var searchValue = ""
-    @State private var searchStage = ""
-    @State private var searchPage = ""
-    @State private var searchNumber = ""
+    @State private var searchStage: String?
+    @State private var searchPage: Int?
+    @State private var searchNumber: Int?
+    @State private var stageChoices: [String] = []
+    @State private var pageChoices: [String] = []
+    @State private var numberChoices: [String] = []
+    @State private var showingAbout = false
     @State private var current = 0
     @State private var initialized = false
     @State private var editor: EditorSession?
@@ -76,7 +78,15 @@ struct ContentView: View {
 
     private func refresh(preferredID: Int? = nil) throws {
         let fetchedBooks = try dao.books()
-        let fetched = try dao.select(scope, book: selectedBook, value: searchValue)
+        let stages = try dao.filterChoices(field: "stage", book: selectedBook)
+        let validStage = searchStage.flatMap { stages.contains($0) ? $0 : nil }
+        let pages = try dao.filterChoices(field: "page", book: selectedBook, stage: validStage)
+        let validPage = searchPage.flatMap { pages.contains(String($0)) && validStage != nil ? $0 : nil }
+        let numbers = try dao.filterChoices(field: "numb", book: selectedBook, stage: validStage, page: validPage)
+        let validNumber = searchNumber.flatMap { numbers.contains(String($0)) && validPage != nil ? $0 : nil }
+        let fetched = try dao.selectFiltered(book: selectedBook, stage: validStage, page: validPage, number: validNumber)
+        searchStage = validStage; searchPage = validPage; searchNumber = validNumber
+        stageChoices = stages; pageChoices = pages; numberChoices = numbers
         books = fetchedBooks
         records = fetched
         if let preferredID, let index = records.firstIndex(where: { $0.id == preferredID }) {
@@ -89,58 +99,46 @@ struct ContentView: View {
     }
 
     private func clearSearchInputs() {
-        searchStage = ""; searchPage = ""; searchNumber = ""
+        searchStage = nil; searchPage = nil; searchNumber = nil
+        stageChoices = []; pageChoices = []; numberChoices = []
     }
 
-    // Only user edits trigger a search; record navigation never changes these criteria.
-    private func searchInput(_ target: WordSearch) -> Binding<String> {
-        Binding(get: {
-            switch target {
-            case .stage: return searchStage
-            case .page: return searchPage
-            case .numb: return searchNumber
-            default: return ""
-            }
-        }, set: { value in
-            clearSearchInputs()
-            switch target {
-            case .stage: searchStage = value
-            case .page: searchPage = value
-            case .numb: searchNumber = value
-            default: return
-            }
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Allow clearing a numeric field while typing without presenting an error.
-            guard trimmed.isEmpty || target == .stage || Int(trimmed) != nil else { return }
-            scope = trimmed.isEmpty ? .book : target
-            searchValue = trimmed
-            search()
-        })
+    private func chooseFilter(_ target: WordSearch, value: String?) {
+        switch target {
+        case .stage: searchStage = value; searchPage = nil; searchNumber = nil
+        case .page: searchPage = value.flatMap(Int.init); searchNumber = nil
+        case .numb: searchNumber = value.flatMap(Int.init)
+        default: return
+        }
+        search()
     }
 
-    private func hideSearchKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
-
-    private func searchField(_ title: String, target: WordSearch) -> some View {
+    private func searchField(_ title: String, target: WordSearch, choices: [String], selected: String?, enabled: Bool) -> some View {
         HStack(spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.blue)
-            TextField("—", text: searchInput(target))
-                .textFieldStyle(.roundedBorder)
+            Menu {
+                Button("すべて") { chooseFilter(target, value: nil) }
+                ForEach(choices, id: \.self) { value in
+                    Button(value.isEmpty ? "（章なし）" : value) { chooseFilter(target, value: value) }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selected.map { $0.isEmpty ? "（章なし）" : $0 } ?? "すべて").lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
                 .font(.subheadline)
-                .multilineTextAlignment(.trailing)
-                .keyboardType(target == .stage ? .default : .numberPad)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel("\(title)で検索")
+                .padding(.horizontal, 6).padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .disabled(!enabled || choices.isEmpty)
+            .accessibilityLabel("\(title)で検索")
         }
     }
 
     private func chooseBook(_ book: String) {
         selectedBook = book
         clearSearchInputs()
-        scope = .book
-        searchValue = ""
         search()
     }
 
@@ -157,8 +155,6 @@ struct ContentView: View {
         else { try dao.update(record); savedID = record.id }
         selectedBook = record.book
         clearSearchInputs()
-        scope = .book
-        searchValue = ""
         // A successful write must not be offered again if the subsequent read fails.
         do { try refresh(preferredID: savedID) }
         catch {
@@ -173,7 +169,7 @@ struct ContentView: View {
             let book = pendingRecords.first?.book ?? ""
             pendingRecords = []
             clearSearchInputs()
-            selectedBook = book; scope = .book; searchValue = ""; current = 0
+            selectedBook = book; current = 0
             records = []; books = []
             do { try refresh() }
             catch { report(DataError.database("取り込みは完了しましたが、表示の更新に失敗しました。\n" + error.localizedDescription)) }
@@ -228,7 +224,6 @@ struct ContentView: View {
                         .background(Color.accentColor.opacity(0.09), in: Capsule())
                         .fixedSize()
                         .accessibilityLabel("現在レコードと総件数")
-                    Spacer()
                     Text("P.\(active?.page ?? 0)/No.\(active?.numb ?? 0)")
                         .font(.system(.caption, design: .rounded, weight: .semibold))
                         .monospacedDigit()
@@ -244,21 +239,17 @@ struct ContentView: View {
                         }
                     } label: {
                         Label(selectedBook.isEmpty ? "本を選択" : selectedBook, systemImage: "book")
+                            .font(.caption.weight(.medium))
                             .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     .disabled(books.isEmpty)
                 }.padding(.horizontal)
                 HStack(spacing: 10) {
-                    searchField("章", target: .stage)
-                    searchField("頁", target: .page)
-                    searchField("番号", target: .numb)
+                    searchField("章", target: .stage, choices: stageChoices, selected: searchStage, enabled: !books.isEmpty)
+                    searchField("頁", target: .page, choices: pageChoices, selected: searchPage.map(String.init), enabled: searchStage != nil)
+                    searchField("番号", target: .numb, choices: numberChoices, selected: searchNumber.map(String.init), enabled: searchStage != nil && searchPage != nil)
                 }.padding(.horizontal)
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("完了") { hideSearchKeyboard() }
-                    }
-                }
                 Divider()
                 if let record = active {
                     ZStack {
@@ -273,17 +264,13 @@ struct ContentView: View {
                                     }
                                 }
                                 Text("\(record.book) ／ \(record.stage)章").font(.caption).foregroundStyle(.secondary)
-                                ForEach(Array(fieldGroups(record).enumerated()), id: \.offset) { _, group in
-                                    if let first = group.first, hiddenFields.contains(first.title) {
-                                        CompactFieldLayout() {
-                                            ForEach(group) { item in
-                                                fieldHeader(item.title)
-                                            }
-                                        }
-                                    } else {
-                                        ForEach(group) { item in
-                                            field(item.title, item.text)
-                                        }
+                                ForEach(displayFields(record).filter { !hiddenFields.contains($0.title) }) { item in
+                                    field(item.title, item.text)
+                                }
+                                let hidden = displayFields(record).filter { hiddenFields.contains($0.title) }
+                                if !hidden.isEmpty {
+                                    CompactFieldLayout() {
+                                        ForEach(hidden) { item in fieldHeader(item.title) }
                                     }
                                 }
                             }.padding()
@@ -319,19 +306,24 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .overlay(alignment: .bottomTrailing) {
                 Menu {
-                    Button { editor = EditorSession(record: Words(book: selectedBook), isNew: true) } label: { Label("New", systemImage: "plus") }
-                    Button { if let active { editor = EditorSession(record: active, isNew: false) } } label: { Label("Edit", systemImage: "pencil") }.disabled(active == nil)
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Del", systemImage: "trash") }.disabled(active == nil)
+                    Button { editor = EditorSession(record: Words(book: selectedBook), isNew: true) } label: { Label("新規", systemImage: "plus") }
+                    Button { if let active { editor = EditorSession(record: active, isNew: false) } } label: { Label("編集", systemImage: "pencil") }.disabled(active == nil)
                     Divider()
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("削除", systemImage: "trash") }.disabled(active == nil)
+                    Divider()
+                    Button { openTransfer(.questions) } label: { Label("出題用JSON", systemImage: "shuffle") }.disabled(active == nil)
                     Button { openTransfer(.exporting) } label: { Label("エクスポート", systemImage: "square.and.arrow.up") }
                     Button { openTransfer(.importing) } label: { Label("インポート", systemImage: "square.and.arrow.down") }
-                    Button { openTransfer(.questions) } label: { Label("出題用JSON", systemImage: "shuffle") }.disabled(active == nil)
                     Divider()
                     Button(role: .destructive) { confirmReset = true } label: { Label("初期化", systemImage: "exclamationmark.triangle") }
+                    Divider()
+                    Button { showingAbout = true } label: { Label("About", systemImage: "info.circle") }
                 } label: {
                     Image(systemName: "gearshape.fill").font(.title2).padding(16)
                         .background(.regularMaterial, in: Circle()).shadow(radius: 3)
-                }.accessibilityLabel("操作メニュー").padding()
+                }
+                .menuOrder(.fixed)
+                .accessibilityLabel("操作メニュー").padding()
             }
             .task {
                 guard !initialized else { return }
@@ -352,6 +344,7 @@ struct ContentView: View {
             }) { session in
                 WordEditor(record: session.record, isNew: session.isNew) { try save($0, isNew: session.isNew) }
             }
+            .sheet(isPresented: $showingAbout) { AboutView() }
             .sheet(item: $transfer, onDismiss: {
                 if let pendingTransfer {
                     self.pendingTransfer = nil
@@ -401,7 +394,7 @@ struct ContentView: View {
                     do {
                         try dao.clearAllRecords()
                         clearSearchInputs()
-                        records = []; books = []; selectedBook = ""; current = 0; scope = .book; searchValue = ""
+                        records = []; books = []; selectedBook = ""; current = 0
                     } catch { report(error) }
                 }
                 Button("キャンセル", role: .cancel) { }
@@ -415,7 +408,7 @@ struct ContentView: View {
         return labels.indices.contains(value) ? labels[value] : String(value)
     }
 
-    private func fieldGroups(_ record: Words) -> [[DisplayField]] {
+    private func displayFields(_ record: Words) -> [DisplayField] {
         let fields = [
             DisplayField(title: "意味", text: record.mean),
             DisplayField(title: "語釈", text: record.expr),
@@ -426,14 +419,7 @@ struct ContentView: View {
             DisplayField(title: "和文", text: record.wabun),
             DisplayField(title: "備考", text: record.descr)
         ]
-        var groups: [[DisplayField]] = []
-        for item in fields {
-            if hiddenFields.contains(item.title), let last = groups.last,
-               let first = last.first, hiddenFields.contains(first.title) {
-                groups[groups.count - 1].append(item)
-            } else { groups.append([item]) }
-        }
-        return groups
+        return fields
     }
 
     private func fieldHeader(_ title: String) -> some View {
@@ -532,15 +518,15 @@ private struct WordEditor: View {
         NavigationStack {
             Form {
                 Section("掲載位置") {
-                    TextField("本", text: $draft.book)
-                    TextField("章", text: $draft.stage)
-                    TextField("頁", text: $page).keyboardType(.numberPad)
-                    TextField("通番", text: $numb).keyboardType(.numberPad)
-                    TextField("連番（0＝ー、1＝①…）", text: $sequence).keyboardType(.numberPad)
+                    positionInput("本", $draft.book)
+                    positionInput("章", $draft.stage)
+                    positionInput("頁", $page).keyboardType(.numberPad)
+                    positionInput("通番", $numb).keyboardType(.numberPad)
+                    positionInput("連番", $sequence).keyboardType(.numberPad)
                 }
                 Section("単語") {
-                    TextField("単語", text: $draft.word, axis: .vertical)
-                    TextField("品詞", text: $draft.type)
+                    input("単語", $draft.word)
+                    input("品詞", $draft.type)
                     text("意味", $draft.mean)
                     text("語釈", $draft.expr)
                     text("類似語", $draft.simlr)
@@ -577,6 +563,21 @@ private struct WordEditor: View {
             }
             .interactiveDismissDisabled()
             .alert("保存できません", isPresented: $showingError) { Button("閉じる", role: .cancel) { } } message: { Text(errorMessage) }
+        }
+    }
+
+    private func positionInput(_ title: String, _ binding: Binding<String>) -> some View {
+        HStack(spacing: 12) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+            TextField(title, text: binding)
+        }
+    }
+
+    private func input(_ title: String, _ binding: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            TextField(title, text: binding, axis: .vertical)
         }
     }
 
@@ -634,7 +635,7 @@ private struct DisplayField: Identifiable {
     var id: String { title }
 }
 
-/// Pack consecutive hidden field controls into rows, wrapping at the available width.
+/// Pack hidden field controls into rows, wrapping at the available width.
 private struct CompactFieldLayout: Layout {
     var horizontalSpacing: CGFloat = 14
     var verticalSpacing: CGFloat = 8

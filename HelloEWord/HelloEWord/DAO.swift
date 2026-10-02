@@ -175,6 +175,47 @@ final class DAO: SQLite3 {
             try bindInt(index: 2, value: Words.number(value, name: scope.rawValue))
             if let throughPage = throughPage, scope == .page { try bindInt(index: 3, value: throughPage) }
         } else if scope == .stage || scope == .word { try bindText(index: 2, value: value) }
+        return try readRecords()
+    }
+
+    func selectFiltered(book: String, stage: String?, page: Int?, number: Int?) throws -> [Words] {
+        defer { finalizeStatement() }
+        let condition = filterCondition(stage: stage, page: page, number: number)
+        try prepare("SELECT id,seq,word,type,mean,expr,simlr,invrt,relat,eibun,wabun,descr,book,stage,page,numb FROM eword" + condition + " ORDER BY book,stage,page,numb,word,seq,id")
+        try bindFilter(book: book, stage: stage, page: page, number: number)
+        return try readRecords()
+    }
+
+    func filterChoices(field: String, book: String, stage: String? = nil, page: Int? = nil) throws -> [String] {
+        guard ["stage", "page", "numb"].contains(field) else { throw DataError.invalid("選択項目が不正です。") }
+        defer { finalizeStatement() }
+        try prepare("SELECT DISTINCT COALESCE(\(field),\(field == "stage" ? "''" : "0")) FROM eword" + filterCondition(stage: stage, page: page, number: nil))
+        try bindFilter(book: book, stage: stage, page: page, number: nil)
+        var values: [String] = []
+        while try step() == SQLITE_ROW {
+            values.append(field == "stage" ? columnText(index: 0) : String(columnInt(index: 0)))
+        }
+        return values.sorted { lhs, rhs in
+            if field != "stage", let a = Int(lhs), let b = Int(rhs) { return a < b }
+            let comparison = lhs.localizedStandardCompare(rhs)
+            return comparison == .orderedSame ? lhs < rhs : comparison == .orderedAscending
+        }
+    }
+
+    private func filterCondition(stage: String?, page: Int?, number: Int?) -> String {
+        " WHERE COALESCE(book,'')=?" + (stage == nil ? "" : " AND COALESCE(stage,'')=?")
+            + (page == nil ? "" : " AND COALESCE(page,0)=?") + (number == nil ? "" : " AND COALESCE(numb,0)=?")
+    }
+
+    private func bindFilter(book: String, stage: String?, page: Int?, number: Int?) throws {
+        try bindText(index: 1, value: book)
+        var index = 2
+        if let stage { try bindText(index: index, value: stage); index += 1 }
+        if let page { try bindInt(index: index, value: page); index += 1 }
+        if let number { try bindInt(index: index, value: number) }
+    }
+
+    private func readRecords() throws -> [Words] {
         var result: [Words] = []
         while try step() == SQLITE_ROW {
             var r = Words()
