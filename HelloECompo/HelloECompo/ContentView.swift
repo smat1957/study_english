@@ -46,6 +46,7 @@ struct ContentView: View {
     @State private var records: [Record] = []
     @State private var initialized = false
     @State private var editorSession: RecordEditorSession?
+    @State private var showAbout = false
     @State private var screenError: String?
     @State private var swipeForward = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -494,13 +495,15 @@ struct ContentView: View {
     var actionMenu: some View {
         Menu {
             Section {
-                Button("New", systemImage: "plus") { beginEditor(isNew: true) }
-                Button("Edit", systemImage: "square.and.pencil") { beginEditor(isNew: false) }
+                Button("新規", systemImage: "plus") { beginEditor(isNew: true) }
+                Button("編集", systemImage: "square.and.pencil") { beginEditor(isNew: false) }
                     .disabled(!records.indices.contains(current))
+            }
+            Section {
                 Button(role: .destructive) {
                     requestConfirmation(.delete)
                 } label: {
-                    Label("Del", systemImage: "trash")
+                    Label("削除", systemImage: "trash")
                 }
                 .disabled(!records.indices.contains(current))
             }
@@ -519,6 +522,9 @@ struct ContentView: View {
                     Label("初期化", systemImage: "arrow.counterclockwise")
                 }
             }
+            Section {
+                Button("About", systemImage: "info.circle") { showAbout = true }
+            }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 23, weight: .semibold))
@@ -527,6 +533,7 @@ struct ContentView: View {
                 .background(Color.accentColor, in: Circle())
                 .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
         }
+        .menuOrder(.fixed)
         .accessibilityLabel("操作メニュー")
         .fileImporter(isPresented: $importFile, allowedContentTypes: transferFormat == .json ? [.json] : [.commaSeparatedText, .plainText],
                       allowsMultipleSelection: false) { result in
@@ -580,7 +587,6 @@ struct ContentView: View {
                 .background(Color.accentColor.opacity(0.09), in: Capsule())
                 .fixedSize()
                 .accessibilityLabel("現在レコードと総件数")
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             Text("P.\(page)/L.\(line)")
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 .monospacedDigit()
@@ -629,7 +635,12 @@ struct ContentView: View {
     }
 
     var body: some View {
+        NavigationStack {
         VStack(alignment: .center){
+            Text("HelloECompo")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
             VStack(alignment: .center){
                 browsingHeader
                 VStack {
@@ -703,15 +714,35 @@ struct ContentView: View {
                         swipeArticle(forward: horizontal < 0)
                     }
             )
-            //Divider()
-            //Spacer()
-        }.padding()
+            .overlay(alignment: .bottom) {
+                HStack {
+                Button { show_current(current: 0) } label: { Image(systemName: "backward.end") }
+                    .disabled(records.isEmpty || current == 0).accessibilityLabel("最初の記事")
+                Spacer()
+                Button { swipeArticle(forward: false) } label: { Image(systemName: "chevron.left") }
+                    .disabled(records.isEmpty || current == 0).accessibilityLabel("前の記事")
+                Spacer()
+                Button { swipeArticle(forward: true) } label: { Image(systemName: "chevron.right") }
+                    .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("次の記事")
+                Spacer()
+                Button { show_current(current: max(records.count - 1, 0)) } label: { Image(systemName: "forward.end") }
+                    .disabled(records.isEmpty || current >= records.count - 1).accessibilityLabel("最後の記事")
+                }.buttonStyle(.plain).frame(height: 28).padding(.horizontal).padding(.trailing, 70)
+            }
+        }
+            .padding(.horizontal)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+            .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .bottomTrailing) {
                 actionMenu
                     .padding(.trailing, 20)
                     .padding(.bottom, 16)
             }
             .onAppear { initialize() }
+            .sheet(isPresented: $showAbout) {
+                AboutView()
+            }
             .sheet(item: $transferSession, onDismiss: presentPendingTransfer) { session in
                 DataTransferOptionsView(direction: session.direction, context: session.context) { format, scope in
                     try prepareTransfer(session.direction, format: format,
@@ -746,7 +777,7 @@ struct ContentView: View {
             } message: {
                 Text(screenError ?? "")
             }
-
+        }
     }
 }
 

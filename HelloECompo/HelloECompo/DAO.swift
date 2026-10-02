@@ -123,7 +123,11 @@ final class DAO: SQLite3 {
             value.map { (name, $0) }
         }
         let filter = filters.isEmpty ? "" : " WHERE " + filters.map { "COALESCE(\($0.0),'')=?" }.joined(separator: " AND ")
-        try prepare("SELECT DISTINCT COALESCE(\(field_name),'') FROM ecompo\(filter) ORDER BY 1")
+        if field_name == "book" {
+            try prepare("SELECT DISTINCT COALESCE(\(field_name),'') FROM ecompo\(filter) ORDER BY 1")
+        } else {
+            try prepare("SELECT COALESCE(\(field_name),'') FROM ecompo\(filter) GROUP BY COALESCE(\(field_name),'') ORDER BY MIN(page), 1")
+        }
         for (index, entry) in filters.enumerated() { try bindText(index: index + 1, value: entry.1) }
         var values: [String] = []
         while try step() == SQLITE_ROW { values.append(columnText(index: 0)) }
