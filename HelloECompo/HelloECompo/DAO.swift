@@ -125,6 +125,8 @@ final class DAO: SQLite3 {
         let filter = filters.isEmpty ? "" : " WHERE " + filters.map { "COALESCE(\($0.0),'')=?" }.joined(separator: " AND ")
         if field_name == "book" {
             try prepare("SELECT DISTINCT COALESCE(\(field_name),'') FROM ecompo\(filter) ORDER BY 1")
+        } else if field_name == "title" {
+            try prepare("SELECT COALESCE(\(field_name),'') FROM ecompo\(filter) GROUP BY COALESCE(\(field_name),'') ORDER BY MIN(line), 1")
         } else {
             try prepare("SELECT COALESCE(\(field_name),'') FROM ecompo\(filter) GROUP BY COALESCE(\(field_name),'') ORDER BY MIN(page), 1")
         }
