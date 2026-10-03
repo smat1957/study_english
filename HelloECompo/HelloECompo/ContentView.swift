@@ -253,11 +253,11 @@ struct ContentView: View {
             }
             focusedField = nil
             UIApplication.shared.closeKeyboard()
-            editorSession = RecordEditorSession(record: record, isNew: isNew)
+            editorSession = RecordEditorSession(record: record, isNew: isNew, records: records, index: current)
         }
     }
 
-    func saveEditor(_ record: Record, isNew: Bool) throws {
+    func saveEditor(_ record: Record, isNew: Bool) throws -> Int {
         let savedID: Int
         if isNew {
             savedID = try dao.insert(record)
@@ -271,6 +271,7 @@ struct ContentView: View {
         catch {
             screenError = "保存は完了しましたが、画面の再読込に失敗しました。本または分類を選び直してください。\n" + error.localizedDescription
         }
+        return savedID
     }
 
     func finishEditing() {
@@ -762,8 +763,9 @@ struct ContentView: View {
                 .presentationDragIndicator(.visible)
             }
             .fullScreenCover(item: $editorSession) { session in
-                RecordEditorView(record: session.record, isNew: session.isNew, onSave: { record in
-                    try saveEditor(record, isNew: session.isNew)
+                RecordEditorView(record: session.record, isNew: session.isNew,
+                                 records: session.records, index: session.index, onSave: { record, isNew in
+                    try saveEditor(record, isNew: isNew)
                 }, onDelete: { recordID in
                     try deleteEditor(id: recordID)
                 })
@@ -809,6 +811,8 @@ struct RecordEditorSession: Identifiable {
     let id = UUID()
     let record: Record
     let isNew: Bool
+    let records: [Record]
+    let index: Int
 }
 
 struct RecordEditorView: View {
@@ -821,17 +825,24 @@ struct RecordEditorView: View {
     @State private var saving = false
     @State private var showDeleteConfirmation = false
     @State private var deleteError: String?
-    let isNew: Bool
-    let onSave: (Record) throws -> Void
+    @State private var isNew: Bool
+    @State private var editorRecords: [Record]
+    @State private var editorIndex: Int
+    @State private var initialFields: [String]
+    @State private var articleIdentity = UUID()
+    let onSave: (Record, Bool) throws -> Int
     let onDelete: (Int) throws -> Void
 
-    init(record: Record, isNew: Bool, onSave: @escaping (Record) throws -> Void,
-         onDelete: @escaping (Int) throws -> Void) {
+    init(record: Record, isNew: Bool, records: [Record], index: Int,
+         onSave: @escaping (Record, Bool) throws -> Int, onDelete: @escaping (Int) throws -> Void) {
         _draft = State(initialValue: record)
         _line = State(initialValue: String(record.line))
         _page = State(initialValue: String(record.page))
         _chap = State(initialValue: String(record.chap))
-        self.isNew = isNew
+        _isNew = State(initialValue: isNew)
+        _editorRecords = State(initialValue: records)
+        _editorIndex = State(initialValue: isNew ? records.count : index)
+        _initialFields = State(initialValue: record.csvFields)
         self.onSave = onSave
         self.onDelete = onDelete
     }
@@ -863,6 +874,17 @@ struct RecordEditorView: View {
                     TextEditor(text: $draft.description).frame(minHeight: 120)
                 }
             }
+            .id(articleIdentity)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { gesture in
+                        let horizontal = gesture.translation.width
+                        let vertical = gesture.translation.height
+                        guard abs(horizontal) >= 40,
+                              abs(horizontal) > abs(vertical) * 1.3 else { return }
+                        moveEditor(forward: horizontal < 0)
+                    }
+            )
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .scrollDismissesKeyboard(.interactively)
@@ -927,15 +949,81 @@ struct RecordEditorView: View {
         .interactiveDismissDisabled()
     }
 
+    private func inputFields() -> [String] {
+        var fields = draft.csvFields
+        fields[4] = line; fields[5] = page; fields[6] = chap
+        return fields
+    }
+
+    private func validatedRecord() throws -> Record {
+        // Use the existing validation for both explicit and swipe saves.
+        try Record(data: inputFields())
+    }
+
+    private func loadEditor(_ record: Record, isNew: Bool, index: Int) {
+        UIApplication.shared.closeKeyboard()
+        draft = record
+        line = String(record.line)
+        page = String(record.page)
+        chap = String(record.chap)
+        self.isNew = isNew
+        editorIndex = index
+        initialFields = record.csvFields
+        articleIdentity = UUID()
+    }
+
+    private func newRecord(after record: Record) -> Record {
+        var next = record
+        next.id = 0
+        next.line = 0
+        next.wabun = ""
+        next.eibun = ""
+        next.hint = ""
+        next.description = ""
+        return next
+    }
+
+    private func moveEditor(forward: Bool) {
+        guard !saving, !showDeleteConfirmation, saveError == nil, deleteError == nil else { return }
+        guard forward || editorIndex > 0 else { return }
+        let hasChanges = inputFields() != initialFields
+        let untouchedNew = isNew && !hasChanges
+        // An untouched new form can go back, but must never create an empty article.
+        guard !untouchedNew || !forward else { return }
+        saving = true
+        defer { saving = false }
+        do {
+            var saved = draft
+            if hasChanges {
+                saved = try validatedRecord()
+                saved.id = try onSave(saved, isNew)
+                if isNew {
+                    editorRecords.append(saved)
+                } else {
+                    editorRecords[editorIndex] = saved
+                }
+                // Record the successful write before changing forms; inserts cannot be retried.
+                draft = saved
+                isNew = false
+                initialFields = saved.csvFields
+            }
+            let nextIndex = editorIndex + (forward ? 1 : -1)
+            if editorRecords.indices.contains(nextIndex) {
+                loadEditor(editorRecords[nextIndex], isNew: false, index: nextIndex)
+            } else if forward {
+                loadEditor(newRecord(after: saved), isNew: true, index: editorRecords.count)
+            }
+        } catch {
+            saveError = error.localizedDescription
+        }
+    }
+
     private func save() {
         guard !saving else { return }
         saving = true
         do {
-            // Revalidate every field through the same path as CSV imports.
-            var fields = draft.csvFields
-            fields[4] = line; fields[5] = page; fields[6] = chap
-            let validated = try Record(data: fields)
-            try onSave(validated)
+            let validated = try validatedRecord()
+            _ = try onSave(validated, isNew)
             dismiss()
         } catch {
             saving = false
