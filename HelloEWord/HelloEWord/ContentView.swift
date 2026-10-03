@@ -17,6 +17,7 @@ private struct EditorSession: Identifiable {
     let id = UUID()
     let record: Words
     let isNew: Bool
+    var records: [Words] = []
 }
 
 private struct ImportSession: Identifiable {
@@ -189,18 +190,23 @@ struct ContentView: View {
         saveBrowsingState()
     }
 
-    private func save(_ record: Words, isNew: Bool) throws {
+    private func save(_ record: Words, isNew: Bool, preserveSearch: Bool = false) throws -> Words {
         let savedID: Int
         if isNew { savedID = try dao.insert(record) }
         else { try dao.update(record); savedID = record.id }
-        selectedBook = record.book
-        clearSearchInputs()
+        if !preserveSearch {
+            selectedBook = record.book
+            clearSearchInputs()
+        }
         // A successful write must not be offered again if the subsequent read fails.
         do { try refresh(preferredID: savedID) }
         catch {
             records = []; current = 0
             deferredReadError = "保存は完了しましたが、表示の更新に失敗しました。\n" + error.localizedDescription
         }
+        var saved = record
+        saved.id = savedID
+        return saved
     }
 
     private func deleteRecord(id: Int) throws {
@@ -365,7 +371,7 @@ struct ContentView: View {
             .overlay(alignment: .bottomTrailing) {
                 Menu {
                     Button { editor = EditorSession(record: Words(book: selectedBook), isNew: true) } label: { Label("新規", systemImage: "plus") }
-                    Button { if let active { editor = EditorSession(record: active, isNew: false) } } label: { Label("編集", systemImage: "pencil") }.disabled(active == nil)
+                    Button { if let active { editor = EditorSession(record: active, isNew: false, records: records) } } label: { Label("編集", systemImage: "pencil") }.disabled(active == nil)
                     Divider()
                     Button { openTransfer(.questions) } label: { Label("出題用JSON", systemImage: "shuffle") }.disabled(active == nil)
                     Button { openTransfer(.exporting) } label: { Label("エクスポート", systemImage: "square.and.arrow.up") }
@@ -400,9 +406,9 @@ struct ContentView: View {
                     showingError = true
                 }
             }) { session in
-                WordEditor(record: session.record, isNew: session.isNew,
-                           onSave: { try save($0, isNew: session.isNew) },
-                           onDelete: { try deleteRecord(id: session.record.id) })
+                WordEditor(record: session.record, isNew: session.isNew, records: session.records,
+                           onSave: { try save($0, isNew: $1, preserveSearch: $2) },
+                           onDelete: { try deleteRecord(id: $0) })
             }
             .sheet(isPresented: $showingAbout) { AboutView() }
             .sheet(item: $transfer, onDismiss: {
@@ -552,20 +558,27 @@ private struct WordEditor: View {
     @State private var errorMessage = ""
     @State private var showingError = false
     @State private var saving = false
-    let isNew: Bool
+    @State private var isNew: Bool
     @State private var confirmDelete = false
-    let deletionTarget: Words
-    let onSave: (Words) throws -> Void
-    let onDelete: () throws -> Void
+    @State private var original: Words
+    @State private var editingRecords: [Words]
+    @State private var editingIndex: Int
+    @FocusState private var inputFocused: Bool
+    let onSave: (Words, Bool, Bool) throws -> Words
+    let onDelete: (Int) throws -> Void
 
-    init(record: Words, isNew: Bool, onSave: @escaping (Words) throws -> Void,
-         onDelete: @escaping () throws -> Void) {
+    init(record: Words, isNew: Bool, records: [Words],
+         onSave: @escaping (Words, Bool, Bool) throws -> Words,
+         onDelete: @escaping (Int) throws -> Void) {
         _draft = State(initialValue: record)
         _page = State(initialValue: String(record.page))
         _numb = State(initialValue: String(record.numb))
         _sequence = State(initialValue: String(record.seq))
-        self.isNew = isNew; self.onSave = onSave
-        self.deletionTarget = record; self.onDelete = onDelete
+        _isNew = State(initialValue: isNew)
+        _original = State(initialValue: record)
+        _editingRecords = State(initialValue: records)
+        _editingIndex = State(initialValue: isNew ? records.count : (records.firstIndex { $0.id == record.id } ?? 0))
+        self.onSave = onSave; self.onDelete = onDelete
     }
 
     var body: some View {
@@ -593,6 +606,12 @@ private struct WordEditor: View {
                     text("備考", $draft.descr)
                 }
             }
+            .simultaneousGesture(DragGesture(minimumDistance: 35).onEnded { gesture in
+                let horizontal = gesture.translation.width
+                if abs(horizontal) > abs(gesture.translation.height), abs(horizontal) >= 60 {
+                    moveEditor(forward: horizontal < 0)
+                }
+            })
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .scrollDismissesKeyboard(.interactively)
@@ -617,11 +636,8 @@ private struct WordEditor: View {
                         guard !saving else { return }
                         saving = true
                         do {
-                            draft.page = try Words.number(page, name: "頁")
-                            draft.numb = try Words.number(numb, name: "通番")
-                            draft.seq = try Words.number(sequence, name: "連番")
-                            try draft.validate()
-                            try onSave(draft)
+                            try persistDraft(preserveSearch: false)
+                            inputFocused = false
                             dismiss()
                         } catch { errorMessage = error.localizedDescription; showingError = true; saving = false }
                     }.disabled(saving)
@@ -633,7 +649,7 @@ private struct WordEditor: View {
                     guard !saving else { return }
                     saving = true
                     do {
-                        try onDelete()
+                        try onDelete(original.id)
                         dismiss()
                     } catch {
                         errorMessage = error.localizedDescription
@@ -643,9 +659,69 @@ private struct WordEditor: View {
                 }
                 Button("キャンセル", role: .cancel) { }
             } message: {
-                Text("\(deletionTarget.word)\n未保存の変更は保存せず、この単語を削除します。")
+                Text("\(original.word)\n未保存の変更は保存せず、この単語を削除します。")
             }
             .alert("処理できません", isPresented: $showingError) { Button("閉じる", role: .cancel) { } } message: { Text(errorMessage) }
+        }
+    }
+
+    private var hasChanges: Bool {
+        draft.csvFields != original.csvFields || page != String(original.page)
+            || numb != String(original.numb) || sequence != String(original.seq)
+    }
+
+    private func validatedDraft() throws -> Words {
+        var record = draft
+        record.page = try Words.number(page, name: "頁")
+        record.numb = try Words.number(numb, name: "通番")
+        record.seq = try Words.number(sequence, name: "連番")
+        try record.validate()
+        return record
+    }
+
+    private func persistDraft(preserveSearch: Bool) throws {
+        let saved = try onSave(validatedDraft(), isNew, preserveSearch)
+        if isNew {
+            editingRecords.append(saved)
+            editingIndex = editingRecords.count - 1
+        } else if editingRecords.indices.contains(editingIndex) {
+            editingRecords[editingIndex] = saved
+        }
+        // Record the successful write before any subsequent navigation.
+        loadDraft(saved, isNew: false)
+    }
+
+    private func loadDraft(_ record: Words, isNew: Bool) {
+        original = record
+        draft = record
+        page = String(record.page)
+        numb = String(record.numb)
+        sequence = String(record.seq)
+        self.isNew = isNew
+        inputFocused = false
+    }
+
+    private func moveEditor(forward: Bool) {
+        guard !saving, !showingError, !confirmDelete else { return }
+        if !forward && editingIndex == 0 { return }
+        // An untouched blank form has nothing to save or advance past.
+        if isNew && !hasChanges && (forward || editingRecords.isEmpty) { return }
+        saving = true
+        defer { saving = false }
+        do {
+            if hasChanges { try persistDraft(preserveSearch: true) }
+            let next = editingIndex + (forward ? 1 : -1)
+            if editingRecords.indices.contains(next) {
+                editingIndex = next
+                loadDraft(editingRecords[next], isNew: false)
+            } else if forward && next == editingRecords.count {
+                let book = draft.book
+                editingIndex = next
+                loadDraft(Words(book: book), isNew: true)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            showingError = true
         }
     }
 
@@ -653,21 +729,21 @@ private struct WordEditor: View {
         HStack(spacing: 12) {
             Text(title).font(.caption).foregroundStyle(.secondary)
                 .frame(width: 40, alignment: .leading)
-            TextField(title, text: binding)
+            TextField(title, text: binding).focused($inputFocused)
         }
     }
 
     private func input(_ title: String, _ binding: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            TextField(title, text: binding, axis: .vertical)
+            TextField(title, text: binding, axis: .vertical).focused($inputFocused)
         }
     }
 
     private func text(_ title: String, _ binding: Binding<String>) -> some View {
         VStack(alignment: .leading) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: binding).frame(minHeight: 80)
+            TextEditor(text: binding).focused($inputFocused).frame(minHeight: 80)
         }
     }
 }
